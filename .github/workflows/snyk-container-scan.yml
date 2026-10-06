@@ -1,0 +1,584 @@
+name: Snyk Container Security POC
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_uri:
+        description: "Full ECR Docker image URI (example: 123456789012.dkr.ecr.ap-south-1.amazonaws.com/my-app:uat-123)"
+        required: true
+        type: string
+
+      severity_threshold:
+        description: "Fail pipeline when vulnerabilities at or above this severity are found"
+        required: true
+        type: choice
+        default: "high"
+        options:
+          - low
+          - medium
+          - high
+          - critical
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: ap-south-1
+
+jobs:
+
+  snyk-container-scan:
+
+    name: Snyk Container Security Scan
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+      # ==========================================================
+      # 1. Display input parameters
+      # ==========================================================
+      - name: Display Scan Parameters
+        run: |
+          echo "============================================================"
+          echo "             SNYK CONTAINER SECURITY POC"
+          echo "============================================================"
+          echo ""
+          echo "Scan Parameters"
+          echo "------------------------------------------------------------"
+          echo "Image URI         : ${{ inputs.image_uri }}"
+          echo "Severity Threshold: ${{ inputs.severity_threshold }}"
+          echo "AWS Region        : $AWS_REGION"
+          echo ""
+          echo "Workflow Run ID   : $GITHUB_RUN_ID"
+          echo "Repository        : $GITHUB_REPOSITORY"
+          echo "Branch            : $GITHUB_REF_NAME"
+          echo "Commit            : $GITHUB_SHA"
+          echo ""
+          echo "============================================================"
+
+
+      # ==========================================================
+      # 2. Checkout repository
+      # ==========================================================
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Log Checkout Details
+        run: |
+          echo "============================================================"
+          echo "                 SOURCE CHECKOUT"
+          echo "============================================================"
+          echo ""
+          echo "Repository : $GITHUB_REPOSITORY"
+          echo "Branch     : $GITHUB_REF_NAME"
+          echo "Commit     : $GITHUB_SHA"
+          echo ""
+          echo "Repository checkout completed successfully."
+          echo ""
+          echo "============================================================"
+
+
+      # ==========================================================
+      # 3. Configure AWS credentials using OIDC
+      # ==========================================================
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Verify AWS Identity
+        run: |
+          echo "============================================================"
+          echo "                 AWS AUTHENTICATION"
+          echo "============================================================"
+          echo ""
+          echo "AWS authentication successful."
+          echo ""
+          echo "AWS Caller Identity:"
+          aws sts get-caller-identity
+          echo ""
+          echo "AWS Region:"
+          aws configure get region
+          echo ""
+          echo "============================================================"
+
+
+      # ==========================================================
+      # 4. Parse ECR image information
+      # ==========================================================
+      - name: Parse ECR Image
+        shell: bash
+        run: |
+
+          IMAGE_URI="${{ inputs.image_uri }}"
+
+          echo "============================================================"
+          echo "                 ECR IMAGE DETAILS"
+          echo "============================================================"
+          echo ""
+          echo "Full Image URI:"
+          echo "$IMAGE_URI"
+          echo ""
+
+          # Extract registry
+          REGISTRY=$(echo "$IMAGE_URI" | cut -d'/' -f1)
+
+          # Extract repository + tag
+          IMAGE_PATH=$(echo "$IMAGE_URI" | cut -d'/' -f2-)
+
+          # Extract repository
+          REPOSITORY=$(echo "$IMAGE_PATH" | cut -d':' -f1)
+
+          # Extract tag
+          TAG=$(echo "$IMAGE_PATH" | cut -d':' -f2-)
+
+          echo "ECR Registry : $REGISTRY"
+          echo "Repository   : $REPOSITORY"
+          echo "Image Tag    : $TAG"
+          echo ""
+
+          echo "IMAGE_URI=$IMAGE_URI" >> "$GITHUB_ENV"
+          echo "ECR_REGISTRY=$REGISTRY" >> "$GITHUB_ENV"
+          echo "ECR_REPOSITORY=$REPOSITORY" >> "$GITHUB_ENV"
+          echo "IMAGE_TAG=$TAG" >> "$GITHUB_ENV"
+
+          echo "============================================================"
+
+
+      # ==========================================================
+      # 5. Login to ECR
+      # ==========================================================
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Log ECR Login Status
+        run: |
+          echo "============================================================"
+          echo "                 ECR AUTHENTICATION"
+          echo "============================================================"
+          echo ""
+          echo "ECR Registry:"
+          echo "$ECR_REGISTRY"
+          echo ""
+          echo "Docker authentication to ECR completed successfully."
+          echo ""
+          echo "============================================================"
+
+
+      # ==========================================================
+      # 6. Verify image exists in ECR
+      # ==========================================================
+      - name: Verify ECR Image
+        run: |
+
+          echo "============================================================"
+          echo "                 VERIFY ECR IMAGE"
+          echo "============================================================"
+          echo ""
+          echo "Repository:"
+          echo "$ECR_REPOSITORY"
+          echo ""
+          echo "Image Tag:"
+          echo "$IMAGE_TAG"
+          echo ""
+
+          aws ecr describe-images \
+            --repository-name "$ECR_REPOSITORY" \
+            --image-ids imageTag="$IMAGE_TAG" \
+            --region "$AWS_REGION"
+
+          echo ""
+          echo "ECR image verification successful."
+          echo ""
+          echo "============================================================"
+
+
+      # ==========================================================
+      # 7. Pull image from ECR
+      # ==========================================================
+      - name: Pull Docker Image
+        run: |
+
+          echo "============================================================"
+          echo "                 DOCKER IMAGE PULL"
+          echo "============================================================"
+          echo ""
+          echo "Pulling image:"
+          echo "$IMAGE_URI"
+          echo ""
+
+          docker pull "$IMAGE_URI"
+
+          echo ""
+          echo "Docker image pulled successfully."
+          echo ""
+          echo "============================================================"
+
+
+      # ==========================================================
+      # 8. Inspect Docker image
+      # ==========================================================
+      - name: Inspect Docker Image
+        run: |
+
+          echo "============================================================"
+          echo "                 DOCKER IMAGE DETAILS"
+          echo "============================================================"
+          echo ""
+
+          echo "Image:"
+          echo "$IMAGE_URI"
+          echo ""
+
+          echo "Docker Image:"
+          docker image inspect "$IMAGE_URI" \
+            --format='Repository: {{index .RepoTags 0}}
+Image ID: {{.Id}}
+Created: {{.Created}}
+Architecture: {{.Architecture}}
+OS: {{.Os}}'
+
+          echo ""
+          echo "Image Size:"
+          docker image inspect "$IMAGE_URI" \
+            --format='{{.Size}}' | numfmt --to=iec
+
+          echo ""
+          echo "============================================================"
+
+
+      # ==========================================================
+      # 9. Install Snyk CLI
+      # ==========================================================
+      - name: Install Snyk CLI
+        run: |
+
+          echo "============================================================"
+          echo "                 SNYK CLI INSTALLATION"
+          echo "============================================================"
+          echo ""
+
+          npm install -g snyk
+
+          echo ""
+          echo "Snyk Version:"
+          snyk --version
+
+          echo ""
+          echo "Snyk CLI installation completed."
+          echo ""
+          echo "============================================================"
+
+
+      # ==========================================================
+      # 10. Authenticate with Snyk
+      # ==========================================================
+      - name: Authenticate Snyk
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        run: |
+
+          echo "============================================================"
+          echo "                 SNYK AUTHENTICATION"
+          echo "============================================================"
+          echo ""
+
+          if [ -z "$SNYK_TOKEN" ]; then
+            echo "ERROR: SNYK_TOKEN is not configured."
+            exit 1
+          fi
+
+          snyk auth "$SNYK_TOKEN"
+
+          echo ""
+          echo "Snyk authentication completed successfully."
+          echo ""
+          echo "============================================================"
+
+
+      # ==========================================================
+      # 11. Run Snyk Container Scan
+      # ==========================================================
+      - name: Run Snyk Container Scan
+        id: snyk_scan
+        continue-on-error: true
+        run: |
+
+          echo "============================================================"
+          echo "              SNYK CONTAINER SECURITY SCAN"
+          echo "============================================================"
+          echo ""
+          echo "Scanner            : Snyk Container"
+          echo "Image              : $IMAGE_URI"
+          echo "Registry           : $ECR_REGISTRY"
+          echo "Repository         : $ECR_REPOSITORY"
+          echo "Image Tag          : $IMAGE_TAG"
+          echo "Severity Threshold : ${{ inputs.severity_threshold }}"
+          echo ""
+          echo "Starting vulnerability scan..."
+          echo ""
+
+          snyk container test "$IMAGE_URI" \
+            --severity-threshold="${{ inputs.severity_threshold }}" \
+            --json-file-output=snyk-container-report.json
+
+          SNYK_EXIT_CODE=$?
+
+          echo ""
+          echo "------------------------------------------------------------"
+          echo "Snyk Exit Code: $SNYK_EXIT_CODE"
+          echo "------------------------------------------------------------"
+          echo ""
+
+          echo "SNYK_EXIT_CODE=$SNYK_EXIT_CODE" >> "$GITHUB_ENV"
+
+          if [ "$SNYK_EXIT_CODE" -eq 0 ]; then
+            echo "RESULT: PASS"
+            echo "No vulnerabilities found at or above the configured threshold."
+          else
+            echo "RESULT: FAIL"
+            echo "Vulnerabilities were found at or above the configured threshold."
+          fi
+
+          echo ""
+          echo "============================================================"
+
+          # Do not fail this step yet.
+          # We want the report and summary steps to execute.
+
+
+      # ==========================================================
+      # 12. Generate human-readable vulnerability summary
+      # ==========================================================
+      - name: Generate Vulnerability Summary
+        if: always()
+        shell: bash
+        run: |
+
+          echo "============================================================"
+          echo "              VULNERABILITY SCAN SUMMARY"
+          echo "============================================================"
+          echo ""
+
+          if [ ! -f snyk-container-report.json ]; then
+            echo "Snyk JSON report was not generated."
+            echo ""
+            echo "============================================================"
+            exit 0
+          fi
+
+          echo "Scanner            : Snyk Container"
+          echo "Image              : $IMAGE_URI"
+          echo "Severity Threshold : ${{ inputs.severity_threshold }}"
+          echo ""
+
+          echo "Snyk JSON report:"
+          echo "snyk-container-report.json"
+          echo ""
+
+          echo "============================================================"
+          echo "Raw Snyk Report Summary"
+          echo "============================================================"
+
+          python3 - <<'PY'
+          import json
+
+          report_file = "snyk-container-report.json"
+
+          try:
+              with open(report_file, "r") as f:
+                  data = json.load(f)
+
+              vulnerabilities = data.get("vulnerabilities", [])
+
+              counts = {
+                  "critical": 0,
+                  "high": 0,
+                  "medium": 0,
+                  "low": 0
+              }
+
+              for vuln in vulnerabilities:
+                  severity = str(vuln.get("severity", "")).lower()
+
+                  if severity in counts:
+                      counts[severity] += 1
+
+              print("")
+              print("Vulnerability Counts")
+              print("--------------------")
+              print(f"Critical : {counts['critical']}")
+              print(f"High     : {counts['high']}")
+              print(f"Medium   : {counts['medium']}")
+              print(f"Low      : {counts['low']}")
+              print("")
+              print(f"Total vulnerabilities: {len(vulnerabilities)}")
+              print("")
+
+              print("Top Vulnerabilities")
+              print("--------------------")
+
+              for vuln in vulnerabilities[:20]:
+                  print(
+                      f"- {vuln.get('severity', 'UNKNOWN').upper():8} "
+                      f"{vuln.get('id', 'N/A')} "
+                      f"{vuln.get('title', 'N/A')}"
+                  )
+
+          except Exception as e:
+              print(f"Unable to parse Snyk report: {e}")
+
+          PY
+
+          echo ""
+          echo "============================================================"
+
+
+      # ==========================================================
+      # 13. Publish summary to GitHub Actions Summary
+      # ==========================================================
+      - name: Publish GitHub Security Summary
+        if: always()
+        shell: bash
+        run: |
+
+          {
+            echo "# Snyk Container Security Scan"
+            echo ""
+            echo "## Scan Details"
+            echo ""
+            echo "| Parameter | Value |"
+            echo "|---|---|"
+            echo "| Scanner | Snyk Container |"
+            echo "| Image | \`$IMAGE_URI\` |"
+            echo "| Registry | \`$ECR_REGISTRY\` |"
+            echo "| Repository | \`$ECR_REPOSITORY\` |"
+            echo "| Tag | \`$IMAGE_TAG\` |"
+            echo "| Severity Threshold | ${{ inputs.severity_threshold }} |"
+            echo "| Snyk Exit Code | $SNYK_EXIT_CODE |"
+            echo ""
+            echo "## Result"
+            echo ""
+
+            if [ "$SNYK_EXIT_CODE" -eq 0 ]; then
+              echo "### ✅ PASS"
+              echo ""
+              echo "No vulnerabilities were found at or above the configured severity threshold."
+            else
+              echo "### ❌ FAIL"
+              echo ""
+              echo "Vulnerabilities were found at or above the configured severity threshold."
+              echo ""
+              echo "**The image must not be promoted further in the deployment pipeline.**"
+            fi
+
+            echo ""
+            echo "## Security Decision"
+            echo ""
+
+            if [ "$SNYK_EXIT_CODE" -eq 0 ]; then
+              echo "The image passed the Snyk security gate."
+              echo ""
+              echo "In the production workflow, the next steps would be:"
+              echo ""
+              echo "1. Cosign image signing"
+              echo "2. Push/promote image to Achala ECR"
+              echo "3. AWS Inspector scanning"
+              echo "4. Deployment"
+            else
+              echo "The image failed the Snyk security gate."
+              echo ""
+              echo "The production workflow must stop."
+              echo ""
+              echo "The following steps must NOT execute:"
+              echo ""
+              echo "- Cosign signing"
+              echo "- ECR promotion/push"
+              echo "- Deployment"
+            fi
+
+          } >> "$GITHUB_STEP_SUMMARY"
+
+
+      # ==========================================================
+      # 14. Upload Snyk JSON report
+      # ==========================================================
+      - name: Upload Snyk JSON Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: snyk-container-security-report
+          path: snyk-container-report.json
+          if-no-files-found: warn
+
+
+      # ==========================================================
+      # 15. Enforce security gate
+      #
+      # This is deliberately the LAST step.
+      #
+      # If Snyk found vulnerabilities above the threshold,
+      # this step fails the GitHub Actions job.
+      # ==========================================================
+      - name: Enforce Snyk Security Gate
+        if: always()
+        run: |
+
+          echo "============================================================"
+          echo "                 SECURITY GATE"
+          echo "============================================================"
+          echo ""
+          echo "Scanner            : Snyk Container"
+          echo "Image              : $IMAGE_URI"
+          echo "Severity Threshold : ${{ inputs.severity_threshold }}"
+          echo "Snyk Exit Code     : $SNYK_EXIT_CODE"
+          echo ""
+
+          if [ "$SNYK_EXIT_CODE" -eq 0 ]; then
+
+            echo "============================================================"
+            echo "                    SECURITY GATE: PASS"
+            echo "============================================================"
+            echo ""
+            echo "The Docker image passed the configured Snyk vulnerability"
+            echo "threshold."
+            echo ""
+            echo "The image is eligible to proceed to the next stage."
+            echo ""
+            echo "For the production pipeline:"
+            echo "  -> Cosign signing"
+            echo "  -> ECR push/promotion"
+            echo "  -> AWS Inspector"
+            echo "  -> Deployment"
+            echo ""
+            echo "============================================================"
+
+            exit 0
+
+          else
+
+            echo "============================================================"
+            echo "                    SECURITY GATE: FAIL"
+            echo "============================================================"
+            echo ""
+            echo "The Docker image contains vulnerabilities at or above"
+            echo "the configured severity threshold."
+            echo ""
+            echo "Severity Threshold:"
+            echo "${{ inputs.severity_threshold }}"
+            echo ""
+            echo "The image MUST NOT be promoted."
+            echo ""
+            echo "Production pipeline actions that MUST NOT execute:"
+            echo "  X Cosign signing"
+            echo "  X ECR push/promotion"
+            echo "  X Deployment"
+            echo ""
+            echo "============================================================"
+
+            exit 1
+
+          fi
