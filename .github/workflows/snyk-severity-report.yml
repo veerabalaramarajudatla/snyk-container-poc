@@ -1,0 +1,871 @@
+name: Snyk Severity Filtered Report
+
+on:
+  workflow_dispatch:
+    inputs:
+
+      image_uri:
+        description: "Full ECR Docker image URI"
+        required: true
+        type: string
+
+      aws_region:
+        description: "AWS Region"
+        required: true
+        default: "ap-south-1"
+        type: string
+
+      severity_threshold:
+        description: "Show this severity and above"
+        required: true
+        default: "high"
+        type: choice
+        options:
+          - low
+          - medium
+          - high
+          - critical
+
+
+permissions:
+  contents: read
+
+
+jobs:
+
+  snyk-severity-report:
+
+    name: Snyk Severity Filtered Report
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+      # ==========================================================
+      # 1. DISPLAY PARAMETERS
+      # ==========================================================
+
+      - name: Display Scan Parameters
+        run: |
+
+          echo "============================================================"
+          echo "        SNYK SEVERITY FILTERED CONTAINER REPORT"
+          echo "============================================================"
+
+          echo ""
+          echo "Image     : ${{ inputs.image_uri }}"
+          echo "Region    : ${{ inputs.aws_region }}"
+          echo "Severity  : ${{ inputs.severity_threshold }}"
+          echo ""
+
+          echo "============================================================"
+
+
+      # ==========================================================
+      # 2. CHECKOUT
+      # ==========================================================
+
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+
+      # ==========================================================
+      # 3. AWS LOGIN
+      # ==========================================================
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ inputs.aws_region }}
+
+
+      # ==========================================================
+      # 4. VERIFY AWS
+      # ==========================================================
+
+      - name: Verify AWS Identity
+        run: |
+
+          echo "AWS Identity:"
+          aws sts get-caller-identity
+
+
+      # ==========================================================
+      # 5. PARSE IMAGE
+      # ==========================================================
+
+      - name: Parse ECR Image
+        shell: bash
+        run: |
+
+          set -e
+
+          IMAGE_URI="${{ inputs.image_uri }}"
+
+          REGISTRY=$(echo "$IMAGE_URI" | cut -d'/' -f1)
+          IMAGE_PATH=$(echo "$IMAGE_URI" | cut -d'/' -f2-)
+
+          REPOSITORY=$(echo "$IMAGE_PATH" | cut -d':' -f1)
+          TAG=$(echo "$IMAGE_PATH" | cut -d':' -f2-)
+
+          echo "IMAGE_URI=$IMAGE_URI" >> "$GITHUB_ENV"
+          echo "ECR_REGISTRY=$REGISTRY" >> "$GITHUB_ENV"
+          echo "ECR_REPOSITORY=$REPOSITORY" >> "$GITHUB_ENV"
+          echo "IMAGE_TAG=$TAG" >> "$GITHUB_ENV"
+
+
+      # ==========================================================
+      # 6. LOGIN ECR
+      # ==========================================================
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+
+      # ==========================================================
+      # 7. VERIFY IMAGE
+      # ==========================================================
+
+      - name: Verify ECR Image
+        run: |
+
+          aws ecr describe-images \
+            --repository-name "$ECR_REPOSITORY" \
+            --image-ids imageTag="$IMAGE_TAG" \
+            --region "${{ inputs.aws_region }}"
+
+          echo ""
+          echo "ECR image exists."
+
+
+      # ==========================================================
+      # 8. PULL IMAGE
+      # ==========================================================
+
+      - name: Pull Docker Image
+        run: |
+
+          echo "Pulling:"
+          echo "$IMAGE_URI"
+
+          docker pull "$IMAGE_URI"
+
+          echo ""
+          echo "Docker image pulled successfully."
+
+
+      # ==========================================================
+      # 9. DISPLAY IMAGE
+      # ==========================================================
+
+      - name: Display Docker Image Information
+        run: |
+
+          echo "============================================================"
+          echo "Docker Image Information"
+          echo "============================================================"
+
+          docker image inspect "$IMAGE_URI" | jq '.[0] | {
+            Id,
+            Created,
+            Architecture,
+            Os,
+            Size,
+            RepoTags
+          }'
+
+
+      # ==========================================================
+      # 10. INSTALL SNYK
+      # ==========================================================
+
+      - name: Install Snyk CLI
+        run: |
+
+          npm install --global snyk
+
+          echo ""
+          echo "Snyk version:"
+          snyk --version
+
+
+      # ==========================================================
+      # 11. VERIFY TOKEN
+      # ==========================================================
+
+      - name: Verify Snyk Token
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        run: |
+
+          if [ -z "$SNYK_TOKEN" ]; then
+            echo "ERROR: SNYK_TOKEN is not configured."
+            exit 1
+          fi
+
+          echo "SNYK_TOKEN is configured."
+
+
+      # ==========================================================
+      # 12. RUN FILTERED SNYK SCAN
+      #
+      # IMPORTANT:
+      #
+      # If HIGH is selected:
+      #
+      # Critical -> Report
+      # High     -> Report
+      # Medium   -> Ignore
+      # Low      -> Ignore
+      #
+      # We intentionally DO NOT fail the pipeline.
+      # ==========================================================
+
+      - name: Run Snyk Severity Scan
+        id: snyk_scan
+        continue-on-error: true
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        run: |
+
+          echo "============================================================"
+          echo "             SNYK SEVERITY FILTERED SCAN"
+          echo "============================================================"
+
+          echo ""
+          echo "Image     : $IMAGE_URI"
+          echo "Threshold : ${{ inputs.severity_threshold }}"
+          echo ""
+
+          set +e
+
+          snyk container test "$IMAGE_URI" \
+            --severity-threshold="${{ inputs.severity_threshold }}" \
+            --json-file-output=snyk-severity-report.json
+
+          SNYK_EXIT_CODE=$?
+
+          set -e
+
+          echo "SNYK_EXIT_CODE=$SNYK_EXIT_CODE" >> "$GITHUB_ENV"
+
+          echo ""
+          echo "Snyk exit code: $SNYK_EXIT_CODE"
+
+          echo ""
+          echo "Scan completed."
+
+          # IMPORTANT:
+          # Do NOT exit 1 here.
+          #
+          # Vulnerabilities are expected.
+          #
+          # This pipeline is REPORT ONLY.
+
+
+      # ==========================================================
+      # 13. GENERATE HTML / TEXT REPORT
+      # ==========================================================
+
+      - name: Generate Severity Report
+        if: always()
+        env:
+          SEVERITY_THRESHOLD: ${{ inputs.severity_threshold }}
+        run: |
+
+          python3 <<'PY'
+
+          import json
+          import html
+          import os
+          from datetime import datetime
+
+
+          INPUT = "snyk-severity-report.json"
+          TXT = "snyk-severity-report.txt"
+          HTML = "snyk-severity-report.html"
+
+
+          threshold = os.environ[
+              "SEVERITY_THRESHOLD"
+          ].upper()
+
+
+          try:
+
+              with open(INPUT, "r") as f:
+                  data = json.load(f)
+
+          except Exception as e:
+
+              message = (
+                  "Unable to read Snyk report.\n\n"
+                  f"Error: {e}\n"
+              )
+
+              with open(TXT, "w") as f:
+                  f.write(message)
+
+              with open(HTML, "w") as f:
+                  f.write(
+                      "<html><body>"
+                      "<h1>Snyk Container Report</h1>"
+                      f"<p>{html.escape(message)}</p>"
+                      "</body></html>"
+                  )
+
+              raise SystemExit(0)
+
+
+          vulnerabilities = data.get(
+              "vulnerabilities",
+              []
+          )
+
+
+          counts = {
+              "critical": 0,
+              "high": 0,
+              "medium": 0,
+              "low": 0,
+              "unknown": 0
+          }
+
+
+          for vuln in vulnerabilities:
+
+              severity = str(
+                  vuln.get(
+                      "severity",
+                      "unknown"
+                  )
+              ).lower()
+
+              counts[
+                  severity
+                  if severity in counts
+                  else "unknown"
+              ] += 1
+
+
+          image = "${{ inputs.image_uri }}"
+
+          scan_time = datetime.utcnow().strftime(
+              "%Y-%m-%d %H:%M:%S UTC"
+          )
+
+
+          # ======================================================
+          # TEXT REPORT
+          # ======================================================
+
+          with open(TXT, "w") as out:
+
+              out.write("=" * 100 + "\n")
+              out.write(
+                  "                 SNYK CONTAINER VULNERABILITY REPORT\n"
+              )
+              out.write("=" * 100 + "\n\n")
+
+              out.write("SCAN INFORMATION\n")
+              out.write("-" * 100 + "\n")
+
+              out.write(
+                  f"Scanner       : Snyk Container\n"
+              )
+
+              out.write(
+                  f"Image         : {image}\n"
+              )
+
+              out.write(
+                  f"Scan Time     : {scan_time}\n"
+              )
+
+              out.write(
+                  f"Severity      : {threshold}\n"
+              )
+
+              out.write(
+                  f"Total Findings: {len(vulnerabilities)}\n"
+              )
+
+              out.write("\n")
+
+
+              out.write("SEVERITY SUMMARY\n")
+              out.write("-" * 100 + "\n")
+
+              out.write(
+                  f"Critical : {counts['critical']}\n"
+              )
+
+              out.write(
+                  f"High     : {counts['high']}\n"
+              )
+
+              out.write(
+                  f"Medium   : {counts['medium']}\n"
+              )
+
+              out.write(
+                  f"Low      : {counts['low']}\n"
+              )
+
+              out.write(
+                  f"Unknown  : {counts['unknown']}\n"
+              )
+
+              out.write("\n")
+
+
+              out.write("VULNERABILITY DETAILS\n")
+              out.write("-" * 100 + "\n\n")
+
+
+              for index, vuln in enumerate(
+                  vulnerabilities,
+                  1
+              ):
+
+                  severity = str(
+                      vuln.get(
+                          "severity",
+                          "unknown"
+                      )
+                  ).upper()
+
+
+                  vuln_id = vuln.get(
+                      "id",
+                      "N/A"
+                  )
+
+                  title = vuln.get(
+                      "title",
+                      "N/A"
+                  )
+
+                  package = vuln.get(
+                      "packageName",
+                      "N/A"
+                  )
+
+                  version = vuln.get(
+                      "version",
+                      "N/A"
+                  )
+
+                  fixed = vuln.get(
+                      "fixedIn",
+                      "N/A"
+                  )
+
+                  cvss = (
+                      vuln.get("CVSSv3")
+                      or vuln.get("CVSSv4")
+                      or vuln.get("cvssScore")
+                      or vuln.get("cvss")
+                      or "N/A"
+                  )
+
+
+                  out.write(
+                      f"[{index}] {severity}\n"
+                  )
+
+                  out.write(
+                      f"    Vulnerability ID : {vuln_id}\n"
+                  )
+
+                  out.write(
+                      f"    Title             : {title}\n"
+                  )
+
+                  out.write(
+                      f"    Package           : {package}\n"
+                  )
+
+                  out.write(
+                      f"    Installed Version : {version}\n"
+                  )
+
+                  out.write(
+                      f"    Fixed Version     : {fixed}\n"
+                  )
+
+                  out.write(
+                      f"    CVSS              : {cvss}\n"
+                  )
+
+
+                  # Dependency path if available
+
+                  dependency = vuln.get(
+                      "from"
+                  )
+
+                  if dependency:
+
+                      out.write(
+                          "    Dependency Path   : "
+                          f"{dependency}\n"
+                      )
+
+
+                  # Dockerfile instruction if available
+
+                  docker_instruction = vuln.get(
+                      "dockerfileInstruction"
+                  )
+
+                  if docker_instruction:
+
+                      out.write(
+                          "    Dockerfile        : "
+                          f"{docker_instruction}\n"
+                      )
+
+
+                  out.write("\n")
+                  out.write("-" * 100 + "\n\n")
+
+
+          # ======================================================
+          # HTML REPORT
+          # ======================================================
+
+          def esc(value):
+
+              return html.escape(
+                  str(value)
+              )
+
+
+          rows = []
+
+
+          for index, vuln in enumerate(
+              vulnerabilities,
+              1
+          ):
+
+              severity = str(
+                  vuln.get(
+                      "severity",
+                      "unknown"
+                  )
+              ).upper()
+
+
+              vuln_id = vuln.get(
+                  "id",
+                  "N/A"
+              )
+
+              title = vuln.get(
+                  "title",
+                  "N/A"
+              )
+
+              package = vuln.get(
+                  "packageName",
+                  "N/A"
+              )
+
+              version = vuln.get(
+                  "version",
+                  "N/A"
+              )
+
+              fixed = vuln.get(
+                  "fixedIn",
+                  "N/A"
+              )
+
+              cvss = (
+                  vuln.get("CVSSv3")
+                  or vuln.get("CVSSv4")
+                  or vuln.get("cvssScore")
+                  or vuln.get("cvss")
+                  or "N/A"
+              )
+
+
+              dependency = vuln.get(
+                  "from",
+                  "N/A"
+              )
+
+
+              docker_instruction = vuln.get(
+                  "dockerfileInstruction",
+                  "N/A"
+              )
+
+
+              rows.append(
+                  f"""
+                  <tr>
+                    <td>{index}</td>
+                    <td><b>{esc(severity)}</b></td>
+                    <td>{esc(vuln_id)}</td>
+                    <td>{esc(title)}</td>
+                    <td>{esc(package)}</td>
+                    <td>{esc(version)}</td>
+                    <td>{esc(fixed)}</td>
+                    <td>{esc(cvss)}</td>
+                    <td>{esc(dependency)}</td>
+                    <td>{esc(docker_instruction)}</td>
+                  </tr>
+                  """
+              )
+
+
+          html_report = f"""
+
+          <!DOCTYPE html>
+
+          <html>
+
+          <head>
+
+          <meta charset="UTF-8">
+
+          <title>Snyk Container Vulnerability Report</title>
+
+          <style>
+
+          body {{
+              font-family: Arial, sans-serif;
+              margin: 30px;
+              background: #f4f6f8;
+              color: #222;
+          }}
+
+          .header {{
+              background: #172033;
+              color: white;
+              padding: 25px;
+              border-radius: 10px;
+          }}
+
+          .section {{
+              background: white;
+              padding: 20px;
+              margin-top: 20px;
+              border-radius: 10px;
+          }}
+
+          table {{
+              width: 100%;
+              border-collapse: collapse;
+              margin-top: 15px;
+          }}
+
+          th {{
+              background: #e5e7eb;
+              padding: 10px;
+              border: 1px solid #ccc;
+          }}
+
+          td {{
+              padding: 9px;
+              border: 1px solid #ddd;
+              vertical-align: top;
+          }}
+
+          .critical {{
+              font-weight: bold;
+          }}
+
+          </style>
+
+          </head>
+
+          <body>
+
+
+          <div class="header">
+
+          <h1>Snyk Container Vulnerability Report</h1>
+
+          <p>
+          <b>Scanner:</b> Snyk Container
+          </p>
+
+          <p>
+          <b>Image:</b> {esc(image)}
+          </p>
+
+          <p>
+          <b>Severity Filter:</b> {esc(threshold)}
+          </p>
+
+          <p>
+          <b>Scan Time:</b> {esc(scan_time)}
+          </p>
+
+          </div>
+
+
+          <div class="section">
+
+          <h2>Severity Summary</h2>
+
+          <table>
+
+          <tr>
+          <th>Severity</th>
+          <th>Count</th>
+          </tr>
+
+          <tr>
+          <td>Critical</td>
+          <td>{counts["critical"]}</td>
+          </tr>
+
+          <tr>
+          <td>High</td>
+          <td>{counts["high"]}</td>
+          </tr>
+
+          <tr>
+          <td>Medium</td>
+          <td>{counts["medium"]}</td>
+          </tr>
+
+          <tr>
+          <td>Low</td>
+          <td>{counts["low"]}</td>
+          </tr>
+
+          </table>
+
+          </div>
+
+
+          <div class="section">
+
+          <h2>
+          Vulnerability Details
+          </h2>
+
+          <table>
+
+          <tr>
+
+          <th>#</th>
+          <th>Severity</th>
+          <th>ID</th>
+          <th>Title</th>
+          <th>Package</th>
+          <th>Installed</th>
+          <th>Fixed</th>
+          <th>CVSS</th>
+          <th>Dependency Path</th>
+          <th>Dockerfile / Layer</th>
+
+          </tr>
+
+          {''.join(rows)}
+
+          </table>
+
+          </div>
+
+
+          </body>
+
+          </html>
+
+          """
+
+
+          with open(
+              HTML,
+              "w"
+          ) as f:
+
+              f.write(html_report)
+
+
+          print(
+              "Reports generated successfully."
+          )
+
+          PY
+
+
+      # ==========================================================
+      # 14. SHOW REPORT IN LOG
+      # ==========================================================
+
+      - name: Display Report
+        if: always()
+        run: |
+
+          echo ""
+          echo "============================================================"
+          echo "              SNYK VULNERABILITY REPORT"
+          echo "============================================================"
+
+          if [ -f snyk-severity-report.txt ]; then
+            cat snyk-severity-report.txt
+          fi
+
+
+      # ==========================================================
+      # 15. UPLOAD REPORT
+      # ==========================================================
+
+      - name: Upload Snyk Severity Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: snyk-severity-report
+          path: |
+            snyk-severity-report.json
+            snyk-severity-report.txt
+            snyk-severity-report.html
+          if-no-files-found: warn
+          retention-days: 30
+
+
+      # ==========================================================
+      # 16. FINAL MESSAGE
+      #
+      # NO SECURITY GATE
+      # NO EXIT 1
+      # ==========================================================
+
+      - name: Scan Completed
+        if: always()
+        run: |
+
+          echo ""
+          echo "============================================================"
+          echo "              SNYK REPORT GENERATION COMPLETE"
+          echo "============================================================"
+
+          echo ""
+          echo "Image:"
+          echo "$IMAGE_URI"
+
+          echo ""
+          echo "Severity:"
+          echo "${{ inputs.severity_threshold }}"
+
+          echo ""
+          echo "Reports:"
+          echo "  - snyk-severity-report.json"
+          echo "  - snyk-severity-report.txt"
+          echo "  - snyk-severity-report.html"
+
+          echo ""
+          echo "The report has been uploaded as a GitHub Actions artifact."
+
+          echo ""
+          echo "============================================================"
