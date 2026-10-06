@@ -1201,7 +1201,7 @@ jobs:
           else:
 
               included_severities = (
-                  "Critical + High + Medium (Low has been excluded)"
+                  "Critical + High + Medium"
               )
 
 
@@ -1216,9 +1216,7 @@ jobs:
 
               low_status = (
                   "Low severity findings have been "
-                  "excluded from this filtered report "
-                  "and are available in the Full Snyk "
-                  "Security Report."
+                  "excluded from this report "
               )
 
           elif "low" in allowed_severities:
