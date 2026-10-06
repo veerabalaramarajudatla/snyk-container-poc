@@ -1,126 +1,61 @@
-name: Snyk Container Vulnerability Scan
+name: Snyk - Filter Security Report
 
-# ============================================================
-# MANUAL TRIGGER ONLY
-# ============================================================
 on:
   workflow_dispatch:
     inputs:
 
       image_uri:
-        description: >
-          Full ECR Docker image URI.
-          Example:
-          123456789012.dkr.ecr.ap-south-1.amazonaws.com/my-app:uat-123
+        description: "ECR image URI"
         required: true
         type: string
 
       aws_region:
-        description: "AWS Region where the ECR repository exists"
+        description: "AWS Region"
         required: true
         default: "ap-south-1"
         type: string
 
-      severity_threshold:
-        description: >
-          Severity threshold for PASS/FAIL decision.
-          The report will still contain ALL vulnerabilities.
+      severity_filter:
+        description: "HIGH = Critical + High + Medium"
         required: true
         default: "high"
         type: choice
         options:
-          - low
-          - medium
-          - high
           - critical
+          - high
+          - medium
+          - low
 
-
-# ============================================================
-# GITHUB PERMISSIONS
-# ============================================================
 permissions:
   contents: read
 
-
-# ============================================================
-# JOB
-# ============================================================
 jobs:
 
-  snyk-container-scan:
+  snyk-filtered-report:
 
-    name: Snyk Container Vulnerability Scan
+    name: Snyk Filtered Container Security Report
 
     runs-on: ubuntu-latest
 
+    env:
+      IMAGE_URI: ${{ inputs.image_uri }}
+      AWS_REGION: ${{ inputs.aws_region }}
+      SEVERITY_FILTER: ${{ inputs.severity_filter }}
+
     steps:
 
-      # ========================================================
-      # 1. DISPLAY INPUT PARAMETERS
-      # ========================================================
-      - name: Display Scan Parameters
-        shell: bash
-        run: |
+      # ============================================================
+      # CHECKOUT
+      # ============================================================
 
-          echo "======================================================================"
-          echo "              SNYK CONTAINER VULNERABILITY SCAN"
-          echo "======================================================================"
-          echo ""
-
-          echo "Scan Configuration"
-          echo "----------------------------------------------------------------------"
-          echo "Docker Image      : ${{ inputs.image_uri }}"
-          echo "AWS Region        : ${{ inputs.aws_region }}"
-          echo "Security Threshold: ${{ inputs.severity_threshold }}"
-          echo ""
-
-          echo "GitHub Repository : $GITHUB_REPOSITORY"
-          echo "Workflow Run ID   : $GITHUB_RUN_ID"
-          echo "Triggered By      : $GITHUB_ACTOR"
-          echo "Run Number        : $GITHUB_RUN_NUMBER"
-          echo ""
-
-          echo "======================================================================"
-
-
-      # ========================================================
-      # 2. CHECKOUT REPOSITORY
-      # ========================================================
-      - name: Checkout Repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
 
-      # ========================================================
-      # 3. LOG REPOSITORY DETAILS
-      # ========================================================
-      - name: Log Repository Details
-        shell: bash
-        run: |
+      # ============================================================
+      # AWS CREDENTIALS
+      # ============================================================
 
-          echo "======================================================================"
-          echo "                      SOURCE DETAILS"
-          echo "======================================================================"
-          echo ""
-
-          echo "Repository : $GITHUB_REPOSITORY"
-          echo "Branch     : $GITHUB_REF_NAME"
-          echo "Commit     : $GITHUB_SHA"
-          echo ""
-
-          echo "Repository checkout completed."
-          echo ""
-
-          echo "======================================================================"
-
-
-      # ========================================================
-      # 4. CONFIGURE AWS CREDENTIALS
-      #
-      # Uses AWS Access Key ID and Secret Access Key
-      # stored securely in GitHub Actions Secrets.
-      #
-      # No AWS_ROLE_ARN is required.
-      # ========================================================
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v6
         with:
@@ -129,1713 +64,2559 @@ jobs:
           aws-region: ${{ inputs.aws_region }}
 
 
-      # ========================================================
-      # 5. VERIFY AWS IDENTITY
-      # ========================================================
-      - name: Verify AWS Identity
-        shell: bash
-        run: |
+      # ============================================================
+      # ECR LOGIN
+      # ============================================================
 
-          echo "======================================================================"
-          echo "                       AWS IDENTITY"
-          echo "======================================================================"
-          echo ""
-
-          aws sts get-caller-identity
-
-          echo ""
-          echo "AWS Region:"
-          echo "${{ inputs.aws_region }}"
-
-          echo ""
-          echo "======================================================================"
-
-
-      # ========================================================
-      # 6. PARSE ECR IMAGE INFORMATION
-      # ========================================================
-      - name: Parse ECR Image
-        shell: bash
-        run: |
-
-          set -e
-
-          IMAGE_URI="${{ inputs.image_uri }}"
-
-          echo "======================================================================"
-          echo "                     ECR IMAGE DETAILS"
-          echo "======================================================================"
-          echo ""
-
-          echo "Full Image URI:"
-          echo "$IMAGE_URI"
-          echo ""
-
-          # ----------------------------------------------------
-          # Validate image URI
-          # ----------------------------------------------------
-          if [[ "$IMAGE_URI" != *.amazonaws.com/*:* ]]; then
-            echo "ERROR: Image URI does not appear to be a tagged ECR image."
-            echo ""
-            echo "Expected format:"
-            echo "123456789012.dkr.ecr.ap-south-1.amazonaws.com/my-app:tag"
-            exit 1
-          fi
-
-          # ----------------------------------------------------
-          # Registry
-          # ----------------------------------------------------
-          REGISTRY=$(echo "$IMAGE_URI" | cut -d'/' -f1)
-
-          # ----------------------------------------------------
-          # Repository + tag
-          # ----------------------------------------------------
-          IMAGE_PATH=$(echo "$IMAGE_URI" | cut -d'/' -f2-)
-
-          # ----------------------------------------------------
-          # Repository
-          # ----------------------------------------------------
-          REPOSITORY=$(echo "$IMAGE_PATH" | cut -d':' -f1)
-
-          # ----------------------------------------------------
-          # Tag
-          # ----------------------------------------------------
-          TAG=$(echo "$IMAGE_PATH" | cut -d':' -f2-)
-
-          if [ -z "$REGISTRY" ] || [ -z "$REPOSITORY" ] || [ -z "$TAG" ]; then
-            echo "ERROR: Unable to parse ECR image URI."
-            exit 1
-          fi
-
-          echo "ECR Registry : $REGISTRY"
-          echo "Repository   : $REPOSITORY"
-          echo "Image Tag    : $TAG"
-          echo ""
-
-          echo "IMAGE_URI=$IMAGE_URI" >> "$GITHUB_ENV"
-          echo "ECR_REGISTRY=$REGISTRY" >> "$GITHUB_ENV"
-          echo "ECR_REPOSITORY=$REPOSITORY" >> "$GITHUB_ENV"
-          echo "IMAGE_TAG=$TAG" >> "$GITHUB_ENV"
-
-          echo "======================================================================"
-
-
-      # ========================================================
-      # 7. LOGIN TO ECR
-      # ========================================================
       - name: Login to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2
 
 
-      # ========================================================
-      # 8. CONFIRM ECR LOGIN
-      # ========================================================
-      - name: Confirm ECR Login
-        shell: bash
-        run: |
+      # ============================================================
+      # VERIFY IMAGE
+      # ============================================================
 
-          echo "======================================================================"
-          echo "                     ECR AUTHENTICATION"
-          echo "======================================================================"
-          echo ""
-
-          echo "Registry:"
-          echo "$ECR_REGISTRY"
-          echo ""
-
-          echo "ECR authentication successful."
-          echo ""
-
-          echo "======================================================================"
-
-
-      # ========================================================
-      # 9. VERIFY IMAGE EXISTS
-      # ========================================================
-      - name: Verify ECR Image
-        shell: bash
+      - name: Verify ECR image
         run: |
 
           set -e
 
-          echo "======================================================================"
-          echo "                    VERIFY ECR IMAGE"
-          echo "======================================================================"
-          echo ""
+          echo "=================================================="
+          echo "ECR IMAGE VALIDATION"
+          echo "=================================================="
 
-          echo "Repository:"
-          echo "$ECR_REPOSITORY"
-          echo ""
+          echo "Image URI : $IMAGE_URI"
+          echo "AWS Region: $AWS_REGION"
 
-          echo "Tag:"
-          echo "$IMAGE_TAG"
-          echo ""
+          IMAGE_WITHOUT_REGISTRY="${IMAGE_URI#*/}"
+
+          IMAGE_REPOSITORY="${IMAGE_WITHOUT_REGISTRY%:*}"
+
+          IMAGE_TAG="${IMAGE_WITHOUT_REGISTRY##*:}"
+
+          if [ "$IMAGE_REPOSITORY" = "$IMAGE_WITHOUT_REGISTRY" ]; then
+            echo "ERROR: Image tag is missing."
+            echo "Expected:"
+            echo "ACCOUNT.dkr.ecr.REGION.amazonaws.com/repository:tag"
+            exit 1
+          fi
+
+          echo "Repository: $IMAGE_REPOSITORY"
+          echo "Tag       : $IMAGE_TAG"
 
           aws ecr describe-images \
-            --repository-name "$ECR_REPOSITORY" \
-            --image-ids imageTag="$IMAGE_TAG" \
-            --region "${{ inputs.aws_region }}"
+            --repository-name "$IMAGE_REPOSITORY" \
+            --image-ids imageTag="$IMAGE_TAG"
 
-          echo ""
-          echo "Image exists in ECR."
-          echo ""
-
-          echo "======================================================================"
+          echo "ECR image exists."
 
 
-      # ========================================================
-      # 10. PULL DOCKER IMAGE
-      # ========================================================
-      - name: Pull Docker Image
-        shell: bash
+      # ============================================================
+      # PULL IMAGE
+      # ============================================================
+
+      - name: Pull Docker image
         run: |
 
           set -e
 
-          echo "======================================================================"
-          echo "                     DOCKER IMAGE PULL"
-          echo "======================================================================"
-          echo ""
-
-          echo "Pulling:"
-          echo "$IMAGE_URI"
-          echo ""
+          echo "=================================================="
+          echo "PULLING DOCKER IMAGE"
+          echo "=================================================="
 
           docker pull "$IMAGE_URI"
 
           echo ""
-          echo "Docker image successfully pulled."
-          echo ""
-
-          echo "======================================================================"
+          echo "Docker image pulled successfully."
 
 
-      # ========================================================
-      # 11. DISPLAY DOCKER IMAGE DETAILS
-      # ========================================================
-      - name: Display Docker Image Details
-        shell: bash
+      # ============================================================
+      # INSTALL SNYK + REPORTLAB
+      # ============================================================
+
+      - name: Install Snyk CLI and PDF dependencies
         run: |
 
           set -e
 
-          echo "======================================================================"
-          echo "                   DOCKER IMAGE INFORMATION"
-          echo "======================================================================"
-          echo ""
-
-          echo "Docker Images:"
-          docker images
-
-          echo ""
-          echo "Image Metadata:"
-
-          docker image inspect "$IMAGE_URI" | jq '.[0] | {
-            Id,
-            Created,
-            Architecture,
-            Os,
-            Size,
-            RepoTags
-          }'
-
-          echo ""
-          echo "======================================================================"
-
-
-      # ========================================================
-      # 12. INSTALL SNYK CLI
-      # ========================================================
-      - name: Install Snyk CLI
-        shell: bash
-        run: |
-
-          set -e
-
-          echo "======================================================================"
-          echo "                       SNYK CLI"
-          echo "======================================================================"
-          echo ""
+          echo "Installing Snyk CLI..."
 
           npm install --global snyk
 
+          echo "Installing ReportLab..."
+
+          python3 -m pip install --upgrade pip
+
+          python3 -m pip install reportlab
+
           echo ""
-          echo "Installed Snyk version:"
+          echo "Snyk version:"
           snyk --version
 
           echo ""
-          echo "Snyk CLI installation completed."
-          echo ""
-
-          echo "======================================================================"
+          echo "Python version:"
+          python3 --version
 
 
-      # ========================================================
-      # 13. VERIFY SNYK TOKEN
-      # ========================================================
-      - name: Verify Snyk Configuration
-        shell: bash
+      # ============================================================
+      # VERIFY SNYK TOKEN
+      # ============================================================
+
+      - name: Verify Snyk token
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         run: |
-
-          echo "======================================================================"
-          echo "                    SNYK AUTHENTICATION"
-          echo "======================================================================"
-          echo ""
-
-          if [ -z "$SNYK_TOKEN" ]; then
-            echo "ERROR: SNYK_TOKEN GitHub secret is not configured."
-            exit 1
-          fi
-
-          echo "SNYK_TOKEN is available."
-          echo "Token value will NOT be displayed."
-          echo ""
-
-          echo "Snyk authentication configuration is ready."
-          echo ""
-
-          echo "======================================================================"
-
-
-      # ========================================================
-      # 14. RUN SNYK CONTAINER SCAN
-      #
-      # IMPORTANT:
-      #
-      # We intentionally DO NOT use:
-      #
-      #   --severity-threshold
-      #
-      # here.
-      #
-      # Reason:
-      # We want the report to contain ALL vulnerabilities:
-      #
-      #   Critical
-      #   High
-      #   Medium
-      #   Low
-      #
-      # The severity threshold is applied separately later
-      # as our security gate.
-      # ========================================================
-      - name: Run Snyk Container Scan
-        id: snyk_scan
-        continue-on-error: true
-        shell: bash
-        env:
-          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-        run: |
-
-          echo "======================================================================"
-          echo "                 SNYK CONTAINER VULNERABILITY SCAN"
-          echo "======================================================================"
-          echo ""
-
-          echo "Scanner            : Snyk Container"
-          echo "Image              : $IMAGE_URI"
-          echo "Severity Threshold : ${{ inputs.severity_threshold }}"
-          echo ""
-
-          echo "IMPORTANT:"
-          echo "The scan will collect ALL vulnerabilities."
-          echo "The severity threshold is applied only to the security gate."
-          echo ""
-
-          echo "Starting Snyk scan..."
-          echo ""
-
-          set +e
-
-          snyk container test "$IMAGE_URI" \
-            --json-file-output=snyk-container-report.json
-
-          SNYK_EXIT_CODE=$?
 
           set -e
 
+          if [ -z "$SNYK_TOKEN" ]; then
+            echo "ERROR: SNYK_TOKEN is not configured."
+            exit 1
+          fi
+
+          echo "SNYK_TOKEN is configured."
+
+
+      # ============================================================
+      # SNYK SCAN
+      #
+      # We scan ALL severities first.
+      #
+      # Filtering is done afterwards because:
+      #
+      # HIGH requirement:
+      # Critical + High + Medium
+      #
+      # This is different from Snyk's normal severity threshold.
+      # ============================================================
+
+      - name: Run Snyk container scan
+        id: snyk_scan
+        continue-on-error: true
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        run: |
+
+          set +e
+
+          echo "=================================================="
+          echo "SNYK CONTAINER SCAN"
+          echo "=================================================="
+
+          echo "Image:"
+          echo "$IMAGE_URI"
+
           echo ""
-          echo "----------------------------------------------------------------------"
-          echo "Snyk CLI Exit Code: $SNYK_EXIT_CODE"
-          echo "----------------------------------------------------------------------"
+
+          snyk container test "$IMAGE_URI" \
+            --json-file-output=snyk-filtered-raw.json
+
+          SNYK_EXIT_CODE=$?
+
           echo ""
+          echo "Snyk exit code: $SNYK_EXIT_CODE"
 
           echo "SNYK_EXIT_CODE=$SNYK_EXIT_CODE" >> "$GITHUB_ENV"
 
-          if [ "$SNYK_EXIT_CODE" -eq 0 ]; then
-
-            echo "Snyk completed successfully."
-            echo "No vulnerabilities were identified."
-
-          elif [ "$SNYK_EXIT_CODE" -eq 1 ]; then
-
-            echo "Snyk completed successfully."
-            echo "Snyk identified vulnerabilities."
-            echo ""
-            echo "This is NOT yet the final PASS/FAIL decision."
-            echo "The configured severity policy will be evaluated separately."
-
-          elif [ "$SNYK_EXIT_CODE" -eq 2 ]; then
-
-            echo "ERROR: Snyk encountered an operational/scan failure."
-            echo "The security gate will FAIL."
-
-          elif [ "$SNYK_EXIT_CODE" -eq 3 ]; then
-
-            echo "ERROR: Snyk encountered an operational/scan failure."
-            echo "The security gate will FAIL."
-
-          else
-
-            echo "ERROR: Unexpected Snyk exit code: $SNYK_EXIT_CODE"
-            echo "The security gate will FAIL."
-
-          fi
-
-          echo ""
-          echo "======================================================================"
-
-
-      # ========================================================
-      # 15. CHECK THAT REPORT EXISTS
-      # ========================================================
-      - name: Validate Snyk Report
-        if: always()
-        shell: bash
-        run: |
-
-          echo "======================================================================"
-          echo "                    SNYK REPORT VALIDATION"
-          echo "======================================================================"
-          echo ""
-
-          if [ -f "snyk-container-report.json" ]; then
-
-            echo "Snyk JSON report generated successfully."
-            echo ""
-
-            echo "Report:"
-            ls -lh snyk-container-report.json
-
-          else
-
-            echo "ERROR: Snyk JSON report was not generated."
-
-          fi
-
-          echo ""
-          echo "======================================================================"
-
-
-      # ========================================================
-      # 16. GENERATE HUMAN READABLE REPORT
-      #
-      # Generates:
-      #
-      #   snyk-container-report.txt
-      #   snyk-container-report.html
-      #
-      # The JSON remains the original Snyk output.
-      # ========================================================
-      - name: Generate Detailed Vulnerability Report
-        if: always()
-        shell: bash
-        env:
-          SEVERITY_THRESHOLD: ${{ inputs.severity_threshold }}
-        run: |
-
-          python3 <<'PY'
-
-          import json
-          import html
-          from datetime import datetime
-
-
-          INPUT = "snyk-container-report.json"
-          TXT = "snyk-container-report.txt"
-          HTML = "snyk-container-report.html"
-
-
-          # ======================================================
-          # READ SNYK JSON
-          # ======================================================
-
-          try:
-
-              with open(INPUT, "r") as f:
-                  data = json.load(f)
-
-          except Exception as e:
-
-              error = f"Unable to read Snyk report: {e}"
-
-              with open(TXT, "w") as f:
-                  f.write(
-                      "Snyk Container Security Report\n"
-                      "================================\n\n"
-                      + error
-                      + "\n"
-                  )
-
-              with open(HTML, "w") as f:
-                  f.write(
-                      "<html>"
-                      "<body>"
-                      "<h1>Snyk Container Security Report</h1>"
-                      f"<p>{html.escape(error)}</p>"
-                      "</body>"
-                      "</html>"
-                  )
-
-              raise SystemExit(0)
-
-
-          # ======================================================
-          # VULNERABILITIES
-          # ======================================================
-
-          vulnerabilities = data.get("vulnerabilities", [])
-
-
-          # ======================================================
-          # COUNTS
-          # ======================================================
-
-          counts = {
-              "critical": 0,
-              "high": 0,
-              "medium": 0,
-              "low": 0,
-              "unknown": 0
-          }
-
-
-          for vuln in vulnerabilities:
-
-              severity = str(
-                  vuln.get("severity", "unknown")
-              ).lower()
-
-              if severity in counts:
-                  counts[severity] += 1
-              else:
-                  counts["unknown"] += 1
-
-
-          # ======================================================
-          # IMAGE / THRESHOLD / TIME
-          # ======================================================
-
-          image_name = "${{ inputs.image_uri }}"
-
-          threshold = "${{ inputs.severity_threshold }}".lower()
-
-          scan_time = datetime.utcnow().strftime(
-              "%Y-%m-%d %H:%M:%S UTC"
-          )
-
-
-          # ======================================================
-          # SEVERITY RANK
-          # ======================================================
-
-          severity_rank = {
-              "low": 1,
-              "medium": 2,
-              "high": 3,
-              "critical": 4
-          }
-
-
-          threshold_rank = severity_rank.get(
-              threshold,
-              3
-          )
-
-
-          # ======================================================
-          # FIND BLOCKING VULNERABILITIES
-          # ======================================================
-
-          blocking = []
-
-
-          for vuln in vulnerabilities:
-
-              severity = str(
-                  vuln.get("severity", "unknown")
-              ).lower()
-
-              if severity in severity_rank:
-
-                  if severity_rank[severity] >= threshold_rank:
-
-                      blocking.append(vuln)
-
-
-          if blocking:
-              security_result = "FAIL"
-          else:
-              security_result = "PASS"
-
-
-          # ======================================================
-          # HELPER
-          # ======================================================
-
-          def get_value(vuln, *keys):
-
-              for key in keys:
-
-                  value = vuln.get(key)
-
-                  if value is not None and value != "":
-
-                      if isinstance(value, list):
-
-                          return ", ".join(
-                              str(item)
-                              for item in value
-                          )
-
-                      return str(value)
-
-              return "N/A"
-
-
-          # ======================================================
-          # TEXT REPORT
-          # ======================================================
-
-          with open(TXT, "w") as out:
-
-              out.write("=" * 100 + "\n")
-              out.write(
-                  "                     SNYK CONTAINER SECURITY REPORT\n"
-              )
-              out.write("=" * 100 + "\n\n")
-
-
-              out.write("SCAN INFORMATION\n")
-              out.write("-" * 100 + "\n")
-
-              out.write(
-                  "Scanner              : Snyk Container\n"
-              )
-
-              out.write(
-                  f"Image                : {image_name}\n"
-              )
-
-              out.write(
-                  f"Scan Time            : {scan_time}\n"
-              )
-
-              out.write(
-                  f"Severity Gate        : {threshold.upper()}\n"
-              )
-
-              out.write(
-                  f"Total Vulnerabilities: {len(vulnerabilities)}\n"
-              )
-
-              out.write(
-                  f"Security Result      : {security_result}\n"
-              )
-
-              out.write("\n")
-
-
-              # --------------------------------------------------
-              # SUMMARY
-              # --------------------------------------------------
-
-              out.write("VULNERABILITY SUMMARY\n")
-              out.write("-" * 100 + "\n")
-
-              out.write(
-                  f"Critical : {counts['critical']}\n"
-              )
-
-              out.write(
-                  f"High     : {counts['high']}\n"
-              )
-
-              out.write(
-                  f"Medium   : {counts['medium']}\n"
-              )
-
-              out.write(
-                  f"Low      : {counts['low']}\n"
-              )
-
-              out.write(
-                  f"Unknown  : {counts['unknown']}\n"
-              )
-
-              out.write("\n")
-
-
-              # --------------------------------------------------
-              # DETAILS
-              # --------------------------------------------------
-
-              out.write("VULNERABILITY DETAILS\n")
-              out.write("-" * 100 + "\n\n")
-
-
-              if not vulnerabilities:
-
-                  out.write(
-                      "No vulnerabilities were reported by Snyk.\n\n"
-                  )
-
-
-              for index, vuln in enumerate(
-                  vulnerabilities,
-                  1
-              ):
-
-                  severity = str(
-                      vuln.get(
-                          "severity",
-                          "unknown"
-                      )
-                  ).upper()
-
-
-                  vuln_id = get_value(
-                      vuln,
-                      "id"
-                  )
-
-
-                  title = get_value(
-                      vuln,
-                      "title"
-                  )
-
-
-                  package = get_value(
-                      vuln,
-                      "packageName",
-                      "name"
-                  )
-
-
-                  version = get_value(
-                      vuln,
-                      "version",
-                      "versionIntroduced"
-                  )
-
-
-                  fixed = get_value(
-                      vuln,
-                      "fixedIn"
-                  )
-
-
-                  cvss = get_value(
-                      vuln,
-                      "CVSSv3",
-                      "CVSSv4",
-                      "cvssScore",
-                      "cvss"
-                  )
-
-
-                  is_upgradable = vuln.get(
-                      "isUpgradable"
-                  )
-
-
-                  is_patchable = vuln.get(
-                      "isPatchable"
-                  )
-
-
-                  if (
-                      severity.lower() in severity_rank
-                      and
-                      severity_rank[severity.lower()]
-                      >= threshold_rank
-                  ):
-
-                      gate = "BLOCKING"
-
-                  else:
-
-                      gate = "INFORMATIONAL"
-
-
-                  out.write(
-                      f"[{index}] {severity}\n"
-                  )
-
-                  out.write(
-                      f"    Vulnerability ID : {vuln_id}\n"
-                  )
-
-                  out.write(
-                      f"    Title             : {title}\n"
-                  )
-
-                  out.write(
-                      f"    Package           : {package}\n"
-                  )
-
-                  out.write(
-                      f"    Installed Version : {version}\n"
-                  )
-
-                  out.write(
-                      f"    Fixed Version     : {fixed}\n"
-                  )
-
-                  out.write(
-                      f"    CVSS              : {cvss}\n"
-                  )
-
-
-                  if is_upgradable is not None:
-
-                      out.write(
-                          f"    Upgradable        : "
-                          f"{is_upgradable}\n"
-                      )
-
-
-                  if is_patchable is not None:
-
-                      out.write(
-                          f"    Patchable         : "
-                          f"{is_patchable}\n"
-                      )
-
-
-                  out.write(
-                      f"    Security Gate      : {gate}\n"
-                  )
-
-
-                  # Additional useful fields if available
-
-                  exploit_maturity = vuln.get(
-                      "exploitMaturity"
-                  )
-
-                  if exploit_maturity:
-
-                      out.write(
-                          f"    Exploit Maturity   : "
-                          f"{exploit_maturity}\n"
-                      )
-
-
-                  references = vuln.get(
-                      "references"
-                  )
-
-                  if references:
-
-                      out.write(
-                          "    References         :\n"
-                      )
-
-                      if isinstance(
-                          references,
-                          list
-                      ):
-
-                          for ref in references:
-
-                              if isinstance(
-                                  ref,
-                                  dict
-                              ):
-
-                                  ref_url = (
-                                      ref.get("url")
-                                      or ref.get("href")
-                                      or str(ref)
-                                  )
-
-                              else:
-
-                                  ref_url = str(ref)
-
-                              out.write(
-                                  f"      - {ref_url}\n"
-                              )
-
-
-                  out.write("\n")
-                  out.write("-" * 100 + "\n\n")
-
-
-              # --------------------------------------------------
-              # SECURITY DECISION
-              # --------------------------------------------------
-
-              out.write(
-                  "SECURITY GATE DECISION\n"
-              )
-
-              out.write(
-                  "-" * 100 + "\n\n"
-              )
-
-
-              if security_result == "PASS":
-
-                  out.write(
-                      f"PASS - No vulnerabilities at or above "
-                      f"{threshold.upper()} were found.\n"
-                  )
-
-                  out.write(
-                      "\nThe image passed the configured "
-                      "security policy.\n"
-                  )
-
-              else:
-
-                  out.write(
-                      f"FAIL - Vulnerabilities at or above "
-                      f"{threshold.upper()} were found.\n"
-                  )
-
-                  out.write(
-                      "\nThe image must NOT be promoted.\n"
-                  )
-
-                  out.write(
-                      "The image must NOT be signed.\n"
-                  )
-
-                  out.write(
-                      "The image must NOT proceed to deployment.\n"
-                  )
-
-
-              out.write("\n")
-              out.write("=" * 100 + "\n")
-
-
-          # ======================================================
-          # HTML REPORT
-          # ======================================================
-
-          def esc(value):
-
-              return html.escape(
-                  str(value)
-              )
-
-
-          rows = []
-
-
-          for index, vuln in enumerate(
-              vulnerabilities,
-              1
-          ):
-
-              severity = str(
-                  vuln.get(
-                      "severity",
-                      "unknown"
-                  )
-              ).upper()
-
-
-              vuln_id = get_value(
-                  vuln,
-                  "id"
-              )
-
-
-              title = get_value(
-                  vuln,
-                  "title"
-              )
-
-
-              package = get_value(
-                  vuln,
-                  "packageName",
-                  "name"
-              )
-
-
-              version = get_value(
-                  vuln,
-                  "version",
-                  "versionIntroduced"
-              )
-
-
-              fixed = get_value(
-                  vuln,
-                  "fixedIn"
-              )
-
-
-              cvss = get_value(
-                  vuln,
-                  "CVSSv3",
-                  "CVSSv4",
-                  "cvssScore",
-                  "cvss"
-              )
-
-
-              if (
-                  severity.lower() in severity_rank
-                  and
-                  severity_rank[severity.lower()]
-                  >= threshold_rank
-              ):
-
-                  gate = "BLOCKING"
-
-              else:
-
-                  gate = "INFORMATIONAL"
-
-
-              rows.append(
-                  f"""
-                  <tr>
-                    <td>{index}</td>
-                    <td>{esc(severity)}</td>
-                    <td>{esc(vuln_id)}</td>
-                    <td>{esc(title)}</td>
-                    <td>{esc(package)}</td>
-                    <td>{esc(version)}</td>
-                    <td>{esc(fixed)}</td>
-                    <td>{esc(cvss)}</td>
-                    <td>{esc(gate)}</td>
-                  </tr>
-                  """
-              )
-
-
-          result_color = (
-              "#b91c1c"
-              if security_result == "FAIL"
-              else "#15803d"
-          )
-
-
-          html_report = f"""
-          <!DOCTYPE html>
-
-          <html>
-
-          <head>
-
-          <meta charset="UTF-8">
-
-          <title>
-            Snyk Container Security Report
-          </title>
-
-          <style>
-
-          body {{
-              font-family: Arial, sans-serif;
-              margin: 40px;
-              background: #f7f7f7;
-              color: #222;
-          }}
-
-          .header {{
-              background: #111827;
-              color: white;
-              padding: 25px;
-              border-radius: 8px;
-          }}
-
-          .result {{
-              margin-top: 20px;
-              padding: 20px;
-              background: {result_color};
-              color: white;
-              font-size: 24px;
-              font-weight: bold;
-              border-radius: 8px;
-          }}
-
-          .section {{
-              margin-top: 30px;
-              background: white;
-              padding: 20px;
-              border-radius: 8px;
-          }}
-
-          table {{
-              border-collapse: collapse;
-              width: 100%;
-              background: white;
-          }}
-
-          th,
-          td {{
-              border: 1px solid #ddd;
-              padding: 8px;
-              text-align: left;
-              font-size: 13px;
-          }}
-
-          th {{
-              background: #e5e7eb;
-          }}
-
-          </style>
-
-          </head>
-
-          <body>
-
-
-          <div class="header">
-
-          <h1>
-            Snyk Container Security Report
-          </h1>
-
-          <p>
-            <strong>Scanner:</strong>
-            Snyk Container
-          </p>
-
-          <p>
-            <strong>Image:</strong>
-            {esc(image_name)}
-          </p>
-
-          <p>
-            <strong>Scan Time:</strong>
-            {esc(scan_time)}
-          </p>
-
-          <p>
-            <strong>Severity Gate:</strong>
-            {esc(threshold.upper())}
-          </p>
-
-          </div>
-
-
-          <div class="result">
-
-          Security Result:
-          {esc(security_result)}
-
-          </div>
-
-
-          <div class="section">
-
-          <h2>
-            Vulnerability Summary
-          </h2>
-
-          <table>
-
-          <tr>
-            <th>Severity</th>
-            <th>Count</th>
-          </tr>
-
-          <tr>
-            <td>Critical</td>
-            <td>{counts['critical']}</td>
-          </tr>
-
-          <tr>
-            <td>High</td>
-            <td>{counts['high']}</td>
-          </tr>
-
-          <tr>
-            <td>Medium</td>
-            <td>{counts['medium']}</td>
-          </tr>
-
-          <tr>
-            <td>Low</td>
-            <td>{counts['low']}</td>
-          </tr>
-
-          <tr>
-            <td>Unknown</td>
-            <td>{counts['unknown']}</td>
-          </tr>
-
-          </table>
-
-          </div>
-
-
-          <div class="section">
-
-          <h2>
-            Vulnerability Details
-          </h2>
-
-          <table>
-
-          <tr>
-            <th>#</th>
-            <th>Severity</th>
-            <th>Vulnerability ID</th>
-            <th>Title</th>
-            <th>Package</th>
-            <th>Installed</th>
-            <th>Fixed In</th>
-            <th>CVSS</th>
-            <th>Gate</th>
-          </tr>
-
-          {''.join(rows)}
-
-          </table>
-
-          </div>
-
-
-          <div class="section">
-
-          <h2>
-            Security Decision
-          </h2>
-
-          """
-
-
-          if security_result == "PASS":
-
-              html_report += f"""
-
-              <p>
-
-              <strong>PASS</strong>
-              - No vulnerabilities at or above
-              {esc(threshold.upper())}
-              were detected.
-
-              </p>
-
-              """
-
-          else:
-
-              html_report += f"""
-
-              <p>
-
-              <strong>FAIL</strong>
-              - Vulnerabilities at or above
-              {esc(threshold.upper())}
-              were detected.
-
-              </p>
-
-              <p>
-
-              The image must not be promoted,
-              signed, or deployed.
-
-              </p>
-
-              """
-
-
-          html_report += """
-
-          </div>
-
-          </body>
-
-          </html>
-
-          """
-
-
-          with open(HTML, "w") as f:
-
-              f.write(html_report)
-
-
-          print(
-              "============================================================"
-          )
-
-          print(
-              "Detailed reports generated"
-          )
-
-          print(
-              "============================================================"
-          )
-
-          print(
-              f"Text report : {TXT}"
-          )
-
-          print(
-              f"HTML report : {HTML}"
-          )
-
-          print(
-              f"JSON report : {INPUT}"
-          )
-
-          print(
-              "============================================================"
-          )
-
-          PY
-
-
-      # ========================================================
-      # 17. DISPLAY DETAILED FINDINGS IN ACTIONS LOG
-      # ========================================================
-      - name: Display Detailed Vulnerability Findings
-        if: always()
-        shell: bash
-        run: |
-
-          echo ""
-          echo "======================================================================"
-          echo "                  SNYK VULNERABILITY FINDINGS"
-          echo "======================================================================"
-          echo ""
-
-          if [ -f "snyk-container-report.txt" ]; then
-
-            cat snyk-container-report.txt
-
-          else
-
-            echo "Detailed Snyk report was not generated."
-
-          fi
-
-          echo ""
-          echo "======================================================================"
-
-
-      # ========================================================
-      # 18. PUBLISH GITHUB ACTIONS SUMMARY
-      # ========================================================
-      - name: Publish GitHub Actions Security Summary
-        if: always()
-        shell: bash
-        run: |
-
-          echo "# Snyk Container Security Report" \
-            >> "$GITHUB_STEP_SUMMARY"
-
-          echo "" \
-            >> "$GITHUB_STEP_SUMMARY"
-
-          echo "## Scan Details" \
-            >> "$GITHUB_STEP_SUMMARY"
-
-          echo "" \
-            >> "$GITHUB_STEP_SUMMARY"
-
-          echo "| Parameter | Value |" \
-            >> "$GITHUB_STEP_SUMMARY"
-
-          echo "|---|---|" \
-            >> "$GITHUB_STEP_SUMMARY"
-
-          echo "| Scanner | Snyk Container |" \
-            >> "$GITHUB_STEP_SUMMARY"
-
-          echo "| Image | \`$IMAGE_URI\` |" \
-            >> "$GITHUB_STEP_SUMMARY"
-
-          echo "| Registry | \`$ECR_REGISTRY\` |" \
-            >> "$GITHUB_STEP_SUMMARY"
-
-          echo "| Repository | \`$ECR_REPOSITORY\` |" \
-            >> "$GITHUB_STEP_SUMMARY"
-
-          echo "| Tag | \`$IMAGE_TAG\` |" \
-            >> "$GITHUB_STEP_SUMMARY"
-
-          echo "| Severity Gate | ${{ inputs.severity_threshold }} |" \
-            >> "$GITHUB_STEP_SUMMARY"
-
-          echo "| Snyk Exit Code | $SNYK_EXIT_CODE |" \
-            >> "$GITHUB_STEP_SUMMARY"
-
-
-          echo "" \
-            >> "$GITHUB_STEP_SUMMARY"
-
-
-          if [ "$SNYK_EXIT_CODE" -eq 0 ]; then
-
-            echo "## Snyk Scan Result" \
-              >> "$GITHUB_STEP_SUMMARY"
-
-            echo "" \
-              >> "$GITHUB_STEP_SUMMARY"
-
-            echo "Snyk completed successfully without identifying vulnerabilities." \
-              >> "$GITHUB_STEP_SUMMARY"
-
-          elif [ "$SNYK_EXIT_CODE" -eq 1 ]; then
-
-            echo "## Snyk Scan Result" \
-              >> "$GITHUB_STEP_SUMMARY"
-
-            echo "" \
-              >> "$GITHUB_STEP_SUMMARY"
-
-            echo "Snyk identified vulnerabilities. See the detailed report below." \
-              >> "$GITHUB_STEP_SUMMARY"
-
-          else
-
-            echo "## Snyk Scan Result" \
-              >> "$GITHUB_STEP_SUMMARY"
-
-            echo "" \
-              >> "$GITHUB_STEP_SUMMARY"
-
-            echo "Snyk encountered a scan error. Security gate will fail." \
-              >> "$GITHUB_STEP_SUMMARY"
-
-          fi
-
-
-          if [ -f "snyk-container-report.txt" ]; then
-
-            echo "" \
-              >> "$GITHUB_STEP_SUMMARY"
-
-            echo "## Detailed Findings" \
-              >> "$GITHUB_STEP_SUMMARY"
-
-            echo "" \
-              >> "$GITHUB_STEP_SUMMARY"
-
-            echo '```text' \
-              >> "$GITHUB_STEP_SUMMARY"
-
-            cat snyk-container-report.txt \
-              >> "$GITHUB_STEP_SUMMARY"
-
-            echo '```' \
-              >> "$GITHUB_STEP_SUMMARY"
-
-          fi
-
-
-      # ========================================================
-      # 19. UPLOAD ALL REPORTS
-      # ========================================================
-      - name: Upload Snyk Reports
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: snyk-container-security-reports
-          path: |
-            snyk-container-report.json
-            snyk-container-report.txt
-            snyk-container-report.html
-          if-no-files-found: warn
-          retention-days: 30
-
-
-      # ========================================================
-      # 20. SECURITY GATE
-      #
-      # IMPORTANT:
-      #
-      # The Snyk scan collects ALL vulnerabilities.
-      #
-      # This step applies the configured security policy.
-      #
-      # Example with HIGH:
-      #
-      # Critical -> FAIL
-      # High     -> FAIL
-      # Medium   -> PASS
-      # Low      -> PASS
-      #
-      # Snyk scanner failures -> FAIL
-      # ========================================================
-      - name: Enforce Security Gate
-        if: always()
-        shell: bash
-        env:
-          SEVERITY_THRESHOLD: ${{ inputs.severity_threshold }}
-        run: |
-
-          echo ""
-          echo "======================================================================"
-          echo "                       SECURITY GATE"
-          echo "======================================================================"
-          echo ""
-
-          echo "Scanner            : Snyk Container"
-          echo "Image              : $IMAGE_URI"
-          echo "Severity Threshold : $SEVERITY_THRESHOLD"
-          echo "Snyk Exit Code     : $SNYK_EXIT_CODE"
-          echo ""
-
-
-          # ====================================================
-          # SNYK SCANNER FAILURE
+          # Exit code 1 means vulnerabilities were found.
           #
-          # Exit codes 2 and 3 indicate operational/scanner
-          # failure rather than a normal vulnerability result.
-          # ====================================================
+          # This is a REPORT-ONLY pipeline.
+          #
+          # Therefore we intentionally do not fail the workflow.
 
-          if [ "$SNYK_EXIT_CODE" -eq 2 ] || \
-             [ "$SNYK_EXIT_CODE" -eq 3 ]; then
-
-            echo "ERROR: Snyk scan failed."
-            echo ""
-            echo "SECURITY GATE: FAIL"
-            echo ""
-
-            exit 1
-
-          fi
+          exit 0
 
 
-          # ====================================================
-          # UNKNOWN / UNEXPECTED EXIT CODE
-          # ====================================================
+      # ============================================================
+      # GENERATE FILTERED PDF REPORT
+      # ============================================================
 
-          if [ "$SNYK_EXIT_CODE" -ne 0 ] && \
-             [ "$SNYK_EXIT_CODE" -ne 1 ]; then
+      - name: Generate filtered PDF report
+        if: always()
+        env:
+          INPUT_FILE: snyk-filtered-raw.json
+          OUTPUT_PDF: snyk-filtered-report.pdf
+          OUTPUT_TXT: snyk-filtered-report.txt
+          IMAGE_URI: ${{ inputs.image_uri }}
+          SEVERITY_FILTER: ${{ inputs.severity_filter }}
+        run: |
 
-            echo "ERROR: Unexpected Snyk exit code:"
-            echo "$SNYK_EXIT_CODE"
-            echo ""
-            echo "SECURITY GATE: FAIL"
-            echo ""
+          set -e
 
-            exit 1
-
-          fi
-
-
-          # ====================================================
-          # REPORT MUST EXIST
-          # ====================================================
-
-          if [ ! -f "snyk-container-report.json" ]; then
-
-            echo "ERROR: Snyk report is missing."
-            echo ""
-            echo "SECURITY GATE: FAIL"
-
-            exit 1
-
-          fi
-
-
-          # ====================================================
-          # PARSE REPORT AND APPLY SECURITY POLICY
-          # ====================================================
+          echo "=================================================="
+          echo "GENERATING FILTERED PDF REPORT"
+          echo "=================================================="
 
           python3 <<'PY'
 
           import json
           import os
-          import sys
+          import re
+          from datetime import datetime
+
+          from reportlab.lib import colors
+          from reportlab.lib.enums import TA_CENTER
+          from reportlab.lib.pagesizes import A4
+          from reportlab.lib.styles import (
+              getSampleStyleSheet,
+              ParagraphStyle
+          )
+          from reportlab.lib.units import mm
+          from reportlab.platypus import (
+              SimpleDocTemplate,
+              Paragraph,
+              Spacer,
+              Table,
+              TableStyle,
+              PageBreak
+          )
 
 
-          report_file = "snyk-container-report.json"
+          # ==========================================================
+          # CONFIGURATION
+          # ==========================================================
+
+          INPUT_FILE = os.environ.get(
+              "INPUT_FILE",
+              "snyk-filtered-raw.json"
+          )
+
+          OUTPUT_PDF = os.environ.get(
+              "OUTPUT_PDF",
+              "snyk-filtered-report.pdf"
+          )
+
+          OUTPUT_TXT = os.environ.get(
+              "OUTPUT_TXT",
+              "snyk-filtered-report.txt"
+          )
+
+          IMAGE_URI = os.environ.get(
+              "IMAGE_URI",
+              ""
+          )
+
+          SEVERITY_FILTER = os.environ.get(
+              "SEVERITY_FILTER",
+              "high"
+          ).lower()
 
 
-          threshold = os.environ[
-              "SEVERITY_THRESHOLD"
-          ].lower()
+          # ==========================================================
+          # LOAD SNYK JSON
+          # ==========================================================
 
-
-          ranks = {
-              "low": 1,
-              "medium": 2,
-              "high": 3,
-              "critical": 4
-          }
-
-
-          if threshold not in ranks:
+          if not os.path.exists(INPUT_FILE):
 
               print(
-                  f"ERROR: Invalid severity threshold: {threshold}"
+                  f"WARNING: {INPUT_FILE} does not exist."
               )
 
-              print(
-                  "SECURITY GATE: FAIL"
-              )
+              snyk_data = {
+                  "vulnerabilities": []
+              }
 
-              sys.exit(1)
+          else:
 
+              try:
 
-          threshold_rank = ranks[
-              threshold
-          ]
+                  with open(
+                      INPUT_FILE,
+                      "r",
+                      encoding="utf-8"
+                  ) as file:
 
+                      snyk_data = json.load(file)
 
-          # ====================================================
-          # LOAD REPORT
-          # ====================================================
+              except Exception as error:
 
-          try:
+                  print(
+                      f"WARNING: Failed to read Snyk JSON: {error}"
+                  )
 
-              with open(
-                  report_file,
-                  "r"
-              ) as f:
-
-                  data = json.load(f)
-
-          except Exception as e:
-
-              print(
-                  f"ERROR: Unable to parse Snyk report: {e}"
-              )
-
-              print(
-                  "SECURITY GATE: FAIL"
-              )
-
-              sys.exit(1)
+                  snyk_data = {
+                      "vulnerabilities": []
+                  }
 
 
-          vulnerabilities = data.get(
+          vulnerabilities = snyk_data.get(
               "vulnerabilities",
               []
           )
 
 
-          blocking = []
+          if not isinstance(
+              vulnerabilities,
+              list
+          ):
+
+              vulnerabilities = []
 
 
-          # ====================================================
-          # FIND BLOCKING VULNERABILITIES
-          # ====================================================
+          print(
+              f"Total Snyk findings: {len(vulnerabilities)}"
+          )
 
-          for vuln in vulnerabilities:
+
+          # ==========================================================
+          # FILTER RULES
+          #
+          # HIGH = Critical + High + Medium
+          # ==========================================================
+
+          filter_rules = {
+
+              "critical": {
+                  "critical"
+              },
+
+              "high": {
+                  "critical",
+                  "high",
+                  "medium"
+              },
+
+              "medium": {
+                  "critical",
+                  "high",
+                  "medium"
+              },
+
+              "low": {
+                  "critical",
+                  "high",
+                  "medium",
+                  "low"
+              }
+
+          }
+
+
+          allowed_severities = filter_rules.get(
+              SEVERITY_FILTER,
+              {
+                  "critical",
+                  "high",
+                  "medium"
+              }
+          )
+
+
+          filtered = []
+
+
+          for vulnerability in vulnerabilities:
 
               severity = str(
-                  vuln.get(
+                  vulnerability.get(
                       "severity",
-                      "unknown"
+                      ""
+                  )
+              ).lower().strip()
+
+
+              if severity in allowed_severities:
+
+                  filtered.append(
+                      vulnerability
+                  )
+
+
+          # ==========================================================
+          # SORT BY SEVERITY
+          # ==========================================================
+
+          severity_order = {
+
+              "critical": 0,
+              "high": 1,
+              "medium": 2,
+              "low": 3
+
+          }
+
+
+          filtered.sort(
+              key=lambda item:
+                  severity_order.get(
+                      str(
+                          item.get(
+                              "severity",
+                              ""
+                          )
+                      ).lower(),
+                      99
+                  )
+          )
+
+
+          # ==========================================================
+          # GENERIC CLEAN FUNCTION
+          # ==========================================================
+
+          def clean(value):
+
+              if value is None:
+                  return ""
+
+
+              if isinstance(
+                  value,
+                  str
+              ):
+
+                  return value.strip()
+
+
+              if isinstance(
+                  value,
+                  list
+              ):
+
+                  values = []
+
+
+                  for item in value:
+
+                      if isinstance(
+                          item,
+                          dict
+                      ):
+
+                          if item.get("value"):
+
+                              values.append(
+                                  str(
+                                      item["value"]
+                                  )
+                              )
+
+                          elif item.get("url"):
+
+                              values.append(
+                                  str(
+                                      item["url"]
+                                  )
+                              )
+
+                          elif item.get("name"):
+
+                              values.append(
+                                  str(
+                                      item["name"]
+                                  )
+                              )
+
+                          else:
+
+                              values.append(
+                                  str(item)
+                              )
+
+                      else:
+
+                          values.append(
+                              str(item)
+                          )
+
+
+                  return ", ".join(values)
+
+
+              if isinstance(
+                  value,
+                  dict
+              ):
+
+                  for key in [
+                      "value",
+                      "version",
+                      "name",
+                      "url",
+                      "score",
+                      "baseScore"
+                  ]:
+
+                      if value.get(key) is not None:
+
+                          return str(
+                              value[key]
+                          )
+
+
+                  return str(value)
+
+
+              return str(value)
+
+
+          # ==========================================================
+          # GET VALUE
+          # ==========================================================
+
+          def get_value(
+              vulnerability,
+              *keys
+          ):
+
+              for key in keys:
+
+                  if key not in vulnerability:
+                      continue
+
+
+                  value = clean(
+                      vulnerability.get(
+                          key
+                      )
+                  )
+
+
+                  if value:
+
+                      return value
+
+
+              return "Not provided by Snyk"
+
+
+          # ==========================================================
+          # VULNERABILITY DESCRIPTION
+          # ==========================================================
+
+          def get_description(
+              vulnerability
+          ):
+
+              description = clean(
+                  vulnerability.get(
+                      "description"
+                  )
+              )
+
+
+              if description:
+
+                  return description
+
+
+              message = clean(
+                  vulnerability.get(
+                      "message"
+                  )
+              )
+
+
+              if message:
+
+                  return message
+
+
+              summary = clean(
+                  vulnerability.get(
+                      "summary"
+                  )
+              )
+
+
+              if summary:
+
+                  return summary
+
+
+              return (
+                  "Snyk identified this vulnerability, "
+                  "but no detailed description was provided "
+                  "in the scan result."
+              )
+
+
+          # ==========================================================
+          # VULNERABILITY SUMMARY
+          #
+          # Short summary for every finding.
+          # ==========================================================
+
+          def get_vulnerability_summary(
+              vulnerability
+          ):
+
+              summary = clean(
+                  vulnerability.get(
+                      "summary"
+                  )
+              )
+
+
+              if summary:
+
+                  return summary
+
+
+              description = get_description(
+                  vulnerability
+              )
+
+
+              description = re.sub(
+                  r"\s+",
+                  " ",
+                  description
+              ).strip()
+
+
+              if description:
+
+                  sentences = re.split(
+                      r"(?<=[.!?])\s+",
+                      description
+                  )
+
+
+                  if sentences:
+
+                      return sentences[0]
+
+
+                  return description
+
+
+              title = clean(
+                  vulnerability.get(
+                      "title"
+                  )
+              )
+
+
+              if title:
+
+                  return title
+
+
+              return (
+                  "Vulnerability identified by Snyk."
+              )
+
+
+          # ==========================================================
+          # VULNERABILITY ID
+          # ==========================================================
+
+          def get_vulnerability_id(
+              vulnerability
+          ):
+
+              vulnerability_id = get_value(
+                  vulnerability,
+                  "id",
+                  "issueId"
+              )
+
+
+              if vulnerability_id != "Not provided by Snyk":
+
+                  return vulnerability_id
+
+
+              identifiers = vulnerability.get(
+                  "identifiers",
+                  {}
+              )
+
+
+              if isinstance(
+                  identifiers,
+                  dict
+              ):
+
+                  values = []
+
+
+                  for key in [
+                      "CVE",
+                      "CWE"
+                  ]:
+
+                      ids = identifiers.get(
+                          key,
+                          []
+                      )
+
+
+                      if isinstance(
+                          ids,
+                          list
+                      ):
+
+                          values.extend(
+                              str(x)
+                              for x in ids
+                          )
+
+
+                      elif ids:
+
+                          values.append(
+                              str(ids)
+                          )
+
+
+                  if values:
+
+                      return ", ".join(
+                          values
+                      )
+
+
+              return "Not provided by Snyk"
+
+
+          # ==========================================================
+          # CVSS SCORE
+          # ==========================================================
+
+          def get_cvss_score(
+              vulnerability
+          ):
+
+              for key in [
+                  "cvssScore",
+                  "CVSSv4Score",
+                  "CVSSv3Score"
+              ]:
+
+                  value = vulnerability.get(
+                      key
+                  )
+
+
+                  if value is not None:
+
+                      value = clean(
+                          value
+                      )
+
+
+                      if value:
+
+                          return value
+
+
+              for key in [
+                  "CVSSv4",
+                  "CVSSv3",
+                  "cvss"
+              ]:
+
+                  value = vulnerability.get(
+                      key
+                  )
+
+
+                  if isinstance(
+                      value,
+                      dict
+                  ):
+
+                      for score_key in [
+                          "score",
+                          "baseScore"
+                      ]:
+
+                          if value.get(
+                              score_key
+                          ) is not None:
+
+                              return str(
+                                  value[
+                                      score_key
+                                  ]
+                              )
+
+
+              return "Not provided by Snyk"
+
+
+          # ==========================================================
+          # CVSS VECTOR
+          # ==========================================================
+
+          def get_cvss_vector(
+              vulnerability
+          ):
+
+              for key in [
+                  "CVSSv4",
+                  "CVSSv3",
+                  "cvss",
+                  "cvssVector"
+              ]:
+
+                  value = vulnerability.get(
+                      key
+                  )
+
+
+                  if isinstance(
+                      value,
+                      dict
+                  ):
+
+                      for vector_key in [
+                          "vectorString",
+                          "vector",
+                          "value"
+                      ]:
+
+                          if value.get(
+                              vector_key
+                          ):
+
+                              return str(
+                                  value[
+                                      vector_key
+                                  ]
+                              )
+
+
+                  elif isinstance(
+                      value,
+                      str
+                  ):
+
+                      if value:
+
+                          return value
+
+
+              return "Not provided by Snyk"
+
+
+          # ==========================================================
+          # REFERENCES
+          # ==========================================================
+
+          def get_references(
+              vulnerability
+          ):
+
+              references = []
+
+
+              refs = vulnerability.get(
+                  "references",
+                  []
+              )
+
+
+              if isinstance(
+                  refs,
+                  list
+              ):
+
+                  for reference in refs:
+
+                      if isinstance(
+                          reference,
+                          dict
+                      ):
+
+                          url = reference.get(
+                              "url"
+                          )
+
+
+                          if url:
+
+                              references.append(
+                                  str(url)
+                              )
+
+
+                      elif isinstance(
+                          reference,
+                          str
+                      ):
+
+                          references.append(
+                              reference
+                          )
+
+
+              for key in [
+                  "url",
+                  "info"
+              ]:
+
+                  value = vulnerability.get(
+                      key
+                  )
+
+
+                  if (
+                      isinstance(
+                          value,
+                          str
+                      )
+                      and value.startswith(
+                          "http"
+                      )
+                  ):
+
+                      references.append(
+                          value
+                      )
+
+
+              return list(
+                  dict.fromkeys(
+                      references
+                  )
+              )
+
+
+          # ==========================================================
+          # PDF TEXT HELPER
+          # ==========================================================
+
+          def paragraph(
+              value,
+              style
+          ):
+
+              value = str(
+                  value
+              )
+
+
+              value = (
+                  value
+                  .replace(
+                      "&",
+                      "&amp;"
+                  )
+                  .replace(
+                      "<",
+                      "&lt;"
+                  )
+                  .replace(
+                      ">",
+                      "&gt;"
+                  )
+                  .replace(
+                      "\n",
+                      "<br/>"
+                  )
+              )
+
+
+              return Paragraph(
+                  value,
+                  style
+              )
+
+
+          # ==========================================================
+          # PDF STYLES
+          # ==========================================================
+
+          styles = getSampleStyleSheet()
+
+
+          title_style = ParagraphStyle(
+              "ReportTitle",
+              parent=styles["Title"],
+              fontSize=23,
+              leading=28,
+              alignment=TA_CENTER,
+              spaceAfter=12
+          )
+
+
+          subtitle_style = ParagraphStyle(
+              "ReportSubtitle",
+              parent=styles["Normal"],
+              fontSize=10,
+              leading=14,
+              alignment=TA_CENTER,
+              textColor=colors.HexColor(
+                  "#555555"
+              ),
+              spaceAfter=20
+          )
+
+
+          heading_style = ParagraphStyle(
+              "ReportHeading",
+              parent=styles["Heading2"],
+              fontSize=15,
+              leading=19,
+              spaceBefore=10,
+              spaceAfter=8
+          )
+
+
+          finding_style = ParagraphStyle(
+              "FindingHeading",
+              parent=styles["Heading3"],
+              fontSize=12,
+              leading=16,
+              spaceBefore=4,
+              spaceAfter=7
+          )
+
+
+          body_style = ParagraphStyle(
+              "Body",
+              parent=styles["BodyText"],
+              fontSize=9,
+              leading=13,
+              spaceAfter=6
+          )
+
+
+          small_style = ParagraphStyle(
+              "Small",
+              parent=styles["BodyText"],
+              fontSize=7.5,
+              leading=10,
+              textColor=colors.HexColor(
+                  "#555555"
+              )
+          )
+
+
+          summary_style = ParagraphStyle(
+              "Summary",
+              parent=styles["BodyText"],
+              fontSize=9,
+              leading=13,
+              spaceAfter=8
+          )
+
+
+          # ==========================================================
+          # FOOTER
+          # ==========================================================
+
+          def footer(
+              canvas,
+              doc
+          ):
+
+              canvas.saveState()
+
+              canvas.setFont(
+                  "Helvetica",
+                  8
+              )
+
+              canvas.setFillColor(
+                  colors.HexColor(
+                      "#666666"
+                  )
+              )
+
+              canvas.drawString(
+                  16 * mm,
+                  9 * mm,
+                  "Snyk Container Security Report"
+              )
+
+              canvas.drawRightString(
+                  194 * mm,
+                  9 * mm,
+                  f"Page {doc.page}"
+              )
+
+              canvas.restoreState()
+
+
+          # ==========================================================
+          # COUNTS
+          # ==========================================================
+
+          counts = {
+
+              "critical": 0,
+              "high": 0,
+              "medium": 0,
+              "low": 0
+
+          }
+
+
+          for vulnerability in filtered:
+
+              severity = str(
+                  vulnerability.get(
+                      "severity",
+                      ""
                   )
               ).lower()
 
 
-              if severity in ranks:
+              if severity in counts:
 
-                  if ranks[severity] >= threshold_rank:
+                  counts[
+                      severity
+                  ] += 1
 
-                      blocking.append(vuln)
 
+          # Count original LOW findings.
 
-          # ====================================================
-          # DISPLAY SECURITY POLICY
-          # ====================================================
+          original_low_count = sum(
 
-          print("")
-          print("Security Policy")
-          print("----------------------------")
+              1
 
-          print(
-              f"Threshold : {threshold.upper()}"
+              for vulnerability in vulnerabilities
+
+              if str(
+                  vulnerability.get(
+                      "severity",
+                      ""
+                  )
+              ).lower() == "low"
+
           )
 
-          print(
-              f"Total vulnerabilities : "
-              f"{len(vulnerabilities)}"
-          )
 
-          print(
-              f"Blocking vulnerabilities : "
-              f"{len(blocking)}"
-          )
+          # ==========================================================
+          # REPORT SEVERITY DESCRIPTION
+          # ==========================================================
 
-          print("")
+          if SEVERITY_FILTER == "critical":
 
+              included_severities = "Critical"
 
-          # ====================================================
-          # FAIL
-          # ====================================================
+          elif SEVERITY_FILTER in [
+              "high",
+              "medium"
+          ]:
 
-          if blocking:
-
-              print(
-                  "SECURITY GATE: FAIL"
+              included_severities = (
+                  "Critical + High + Medium"
               )
-
-              print("")
-
-              print(
-                  f"{len(blocking)} "
-                  f"vulnerability/vulnerabilities "
-                  f"are at or above "
-                  f"{threshold.upper()}."
-              )
-
-              print("")
-
-              print(
-                  "Image must NOT be:"
-              )
-
-              print(
-                  "  - Signed"
-              )
-
-              print(
-                  "  - Promoted"
-              )
-
-              print(
-                  "  - Deployed"
-              )
-
-              print("")
-
-              sys.exit(1)
-
-
-          # ====================================================
-          # PASS
-          # ====================================================
 
           else:
 
-              print(
-                  "SECURITY GATE: PASS"
+              included_severities = (
+                  "Critical + High + Medium (Low has been excluded)"
               )
 
-              print("")
 
-              print(
-                  f"No vulnerabilities at or above "
-                  f"{threshold.upper()} were found."
+          # ==========================================================
+          # LOW MESSAGE
+          # ==========================================================
+
+          if (
+              original_low_count > 0
+              and "low" not in allowed_severities
+          ):
+
+              low_status = (
+                  "Low severity findings have been "
+                  "excluded from this filtered report "
+                  "and are available in the Full Snyk "
+                  "Security Report."
               )
 
-              print("")
+          elif "low" in allowed_severities:
 
-              sys.exit(0)
+              low_status = (
+                  "Low severity findings are included "
+                  "in this report."
+              )
+
+          else:
+
+              low_status = (
+                  "No Low severity findings were identified."
+              )
+
+
+          # ==========================================================
+          # CREATE PDF
+          # ==========================================================
+
+          document = SimpleDocTemplate(
+
+              OUTPUT_PDF,
+
+              pagesize=A4,
+
+              rightMargin=16 * mm,
+
+              leftMargin=16 * mm,
+
+              topMargin=16 * mm,
+
+              bottomMargin=16 * mm
+
+          )
+
+
+          story = []
+
+
+          # ==========================================================
+          # COVER PAGE
+          # ==========================================================
+
+          story.append(
+              Spacer(
+                  1,
+                  20 * mm
+              )
+          )
+
+
+          story.append(
+              Paragraph(
+                  "SNYK CONTAINER<br/>SECURITY REPORT",
+                  title_style
+              )
+          )
+
+
+          story.append(
+              Paragraph(
+                  "Filtered Vulnerability Assessment",
+                  subtitle_style
+              )
+          )
+
+
+          cover_data = [
+
+              [
+                  "Container Image",
+                  IMAGE_URI
+              ],
+
+              [
+                  "Scanning Tool",
+                  "Snyk Container"
+              ],
+
+              [
+                  "Report Type",
+                  "Filtered Vulnerability Assessment"
+              ],
+
+              [
+                  "Selected Filter",
+                  SEVERITY_FILTER.upper()
+              ],
+
+              [
+                  "Included Severities",
+                  included_severities
+              ],
+
+              [
+                  "Generated",
+                  datetime.utcnow().strftime(
+                      "%Y-%m-%d %H:%M UTC"
+                  )
+              ]
+
+          ]
+
+
+          cover_table = Table(
+
+              [
+
+                  [
+                      paragraph(
+                          key,
+                          body_style
+                      ),
+
+                      paragraph(
+                          value,
+                          body_style
+                      )
+
+                  ]
+
+                  for key, value in cover_data
+
+              ],
+
+              colWidths=[
+                  48 * mm,
+                  125 * mm
+              ]
+
+          )
+
+
+          cover_table.setStyle(
+              TableStyle([
+
+                  (
+                      "BACKGROUND",
+                      (0, 0),
+                      (0, -1),
+                      colors.HexColor(
+                          "#EAF0F6"
+                      )
+                  ),
+
+                  (
+                      "BOX",
+                      (0, 0),
+                      (-1, -1),
+                      0.7,
+                      colors.HexColor(
+                          "#B7C3D0"
+                      )
+                  ),
+
+                  (
+                      "INNERGRID",
+                      (0, 0),
+                      (-1, -1),
+                      0.3,
+                      colors.HexColor(
+                          "#D5DCE3"
+                      )
+                  ),
+
+                  (
+                      "VALIGN",
+                      (0, 0),
+                      (-1, -1),
+                      "TOP"
+                  ),
+
+                  (
+                      "LEFTPADDING",
+                      (0, 0),
+                      (-1, -1),
+                      8
+                  ),
+
+                  (
+                      "RIGHTPADDING",
+                      (0, 0),
+                      (-1, -1),
+                      8
+                  ),
+
+                  (
+                      "TOPPADDING",
+                      (0, 0),
+                      (-1, -1),
+                      7
+                  ),
+
+                  (
+                      "BOTTOMPADDING",
+                      (0, 0),
+                      (-1, -1),
+                      7
+                  )
+
+              ])
+          )
+
+
+          story.append(
+              cover_table
+          )
+
+
+          story.append(
+              PageBreak()
+          )
+
+
+          # ==========================================================
+          # EXECUTIVE SUMMARY
+          # ==========================================================
+
+          story.append(
+              Paragraph(
+                  "1. Executive Summary",
+                  heading_style
+              )
+          )
+
+
+          story.append(
+              paragraph(
+                  (
+                      f"Snyk Container scanning identified "
+                      f"<b>{len(filtered)}</b> vulnerability "
+                      f"finding(s) matching the selected "
+                      f"<b>{SEVERITY_FILTER.upper()}</b> filter."
+                  ),
+                  body_style
+              )
+          )
+
+
+          story.append(
+              paragraph(
+                  (
+                      "For each vulnerability, this report provides "
+                      "a concise vulnerability summary, the technical "
+                      "explanation supplied by Snyk, affected package "
+                      "information, CVSS details and remediation "
+                      "information."
+                  ),
+                  body_style
+              )
+          )
+
+
+          # ==========================================================
+          # SEVERITY SUMMARY TABLE
+          # ==========================================================
+
+          severity_data = [
+
+              [
+                  paragraph(
+                      "Severity",
+                      body_style
+                  ),
+
+                  paragraph(
+                      "Count",
+                      body_style
+                  )
+              ],
+
+              [
+                  paragraph(
+                      "Critical",
+                      body_style
+                  ),
+
+                  paragraph(
+                      counts["critical"],
+                      body_style
+                  )
+              ],
+
+              [
+                  paragraph(
+                      "High",
+                      body_style
+                  ),
+
+                  paragraph(
+                      counts["high"],
+                      body_style
+                  )
+              ],
+
+              [
+                  paragraph(
+                      "Medium",
+                      body_style
+                  ),
+
+                  paragraph(
+                      counts["medium"],
+                      body_style
+                  )
+              ],
+
+              [
+                  paragraph(
+                      "Low",
+                      body_style
+                  ),
+
+                  paragraph(
+                      counts["low"],
+                      body_style
+                  )
+              ],
+
+              [
+                  paragraph(
+                      "Total",
+                      body_style
+                  ),
+
+                  paragraph(
+                      len(filtered),
+                      body_style
+                  )
+
+              ]
+
+          ]
+
+
+          severity_table = Table(
+
+              severity_data,
+
+              colWidths=[
+                  70 * mm,
+                  35 * mm
+              ]
+
+          )
+
+
+          severity_table.setStyle(
+              TableStyle([
+
+                  (
+                      "BACKGROUND",
+                      (0, 0),
+                      (-1, 0),
+                      colors.HexColor(
+                          "#263746"
+                      )
+                  ),
+
+                  (
+                      "TEXTCOLOR",
+                      (0, 0),
+                      (-1, 0),
+                      colors.white
+                  ),
+
+                  (
+                      "BOX",
+                      (0, 0),
+                      (-1, -1),
+                      0.6,
+                      colors.HexColor(
+                          "#AAB4BE"
+                      )
+                  ),
+
+                  (
+                      "INNERGRID",
+                      (0, 0),
+                      (-1, -1),
+                      0.3,
+                      colors.HexColor(
+                          "#D5DCE3"
+                      )
+                  ),
+
+                  (
+                      "ALIGN",
+                      (1, 1),
+                      (1, -1),
+                      "CENTER"
+                  ),
+
+                  (
+                      "VALIGN",
+                      (0, 0),
+                      (-1, -1),
+                      "MIDDLE"
+                  )
+
+              ])
+          )
+
+
+          story.append(
+              severity_table
+          )
+
+
+          story.append(
+              Spacer(
+                  1,
+                  12
+              )
+          )
+
+
+          # ==========================================================
+          # DETAILED FINDINGS
+          # ==========================================================
+
+          story.append(
+              Paragraph(
+                  "2. Detailed Vulnerability Findings",
+                  heading_style
+              )
+          )
+
+
+          if not filtered:
+
+              story.append(
+                  Paragraph(
+                      "No vulnerabilities matched the selected "
+                      "severity filter.",
+                      body_style
+                  )
+              )
+
+
+          for index, vulnerability in enumerate(
+              filtered,
+              1
+          ):
+
+              severity = get_value(
+                  vulnerability,
+                  "severity"
+              ).upper()
+
+
+              vulnerability_id = (
+                  get_vulnerability_id(
+                      vulnerability
+                  )
+              )
+
+
+              title = get_value(
+                  vulnerability,
+                  "title",
+                  "name"
+              )
+
+
+              package_name = get_value(
+                  vulnerability,
+                  "packageName",
+                  "name"
+              )
+
+
+              installed_version = get_value(
+                  vulnerability,
+                  "version",
+                  "installedVersion"
+              )
+
+
+              fixed_version = get_value(
+                  vulnerability,
+                  "fixedIn",
+                  "nearestFixedInVersion",
+                  "fixedVersion"
+              )
+
+
+              cvss_score = get_cvss_score(
+                  vulnerability
+              )
+
+
+              cvss_vector = get_cvss_vector(
+                  vulnerability
+              )
+
+
+              summary = get_vulnerability_summary(
+                  vulnerability
+              )
+
+
+              description = get_description(
+                  vulnerability
+              )
+
+
+              location = get_value(
+                  vulnerability,
+                  "introducedBy",
+                  "dockerfileInstruction",
+                  "introduced"
+              )
+
+
+              remediation = get_value(
+                  vulnerability,
+                  "upgradePath",
+                  "remediation",
+                  "recommendation"
+              )
+
+
+              references = get_references(
+                  vulnerability
+              )
+
+
+              # ------------------------------------------------------
+              # FINDING TITLE
+              # ------------------------------------------------------
+
+              story.append(
+                  Paragraph(
+                      f"{index}. {title}",
+                      finding_style
+                  )
+              )
+
+
+              # ------------------------------------------------------
+              # FINDING INFORMATION
+              # ------------------------------------------------------
+
+              finding_data = [
+
+                  [
+                      "Severity",
+                      severity
+                  ],
+
+                  [
+                      "Vulnerability ID",
+                      vulnerability_id
+                  ],
+
+                  [
+                      "Affected Package",
+                      package_name
+                  ],
+
+                  [
+                      "Installed Version",
+                      installed_version
+                  ],
+
+                  [
+                      "Fixed Version",
+                      fixed_version
+                  ],
+
+                  [
+                      "CVSS Score",
+                      cvss_score
+                  ]
+
+              ]
+
+
+              finding_table = Table(
+
+                  [
+
+                      [
+                          paragraph(
+                              key,
+                              body_style
+                          ),
+
+                          paragraph(
+                              value,
+                              body_style
+                          )
+
+                      ]
+
+                      for key, value in finding_data
+
+                  ],
+
+                  colWidths=[
+                      48 * mm,
+                      125 * mm
+                  ]
+
+              )
+
+
+              finding_table.setStyle(
+                  TableStyle([
+
+                      (
+                          "BACKGROUND",
+                          (0, 0),
+                          (0, -1),
+                          colors.HexColor(
+                              "#F1F4F7"
+                          )
+                      ),
+
+                      (
+                          "BOX",
+                          (0, 0),
+                          (-1, -1),
+                          0.5,
+                          colors.HexColor(
+                              "#C3CCD4"
+                          )
+                      ),
+
+                      (
+                          "INNERGRID",
+                          (0, 0),
+                          (-1, -1),
+                          0.3,
+                          colors.HexColor(
+                              "#DCE2E7"
+                          )
+                      ),
+
+                      (
+                          "VALIGN",
+                          (0, 0),
+                          (-1, -1),
+                          "TOP"
+                      )
+
+                  ])
+              )
+
+
+              story.append(
+                  finding_table
+              )
+
+
+              story.append(
+                  Spacer(
+                      1,
+                      7
+                  )
+              )
+
+
+              # ------------------------------------------------------
+              # VULNERABILITY SUMMARY
+              # ------------------------------------------------------
+
+              story.append(
+                  Paragraph(
+                      "<b>Vulnerability Summary</b>",
+                      body_style
+                  )
+              )
+
+
+              story.append(
+                  paragraph(
+                      summary,
+                      summary_style
+                  )
+              )
+
+
+              # ------------------------------------------------------
+              # WHY IS THIS A VULNERABILITY?
+              # ------------------------------------------------------
+
+              story.append(
+                  Paragraph(
+                      "<b>Why is this a vulnerability?</b>",
+                      body_style
+                  )
+              )
+
+
+              story.append(
+                  paragraph(
+                      description,
+                      body_style
+                  )
+              )
+
+
+              # ------------------------------------------------------
+              # WHERE IS THE ISSUE?
+              # ------------------------------------------------------
+
+              story.append(
+                  Paragraph(
+                      "<b>Where is the issue in the image?</b>",
+                      body_style
+                  )
+              )
+
+
+              if location == "Not provided by Snyk":
+
+                  location_text = (
+                      "Not provided by Snyk. "
+                      "Container/package vulnerabilities do not "
+                      "always map to a source-code file or "
+                      "Dockerfile instruction."
+                  )
+
+              else:
+
+                  location_text = location
+
+
+              story.append(
+                  paragraph(
+                      location_text,
+                      body_style
+                  )
+              )
+
+
+              # ------------------------------------------------------
+              # REMEDIATION
+              # ------------------------------------------------------
+
+              story.append(
+                  Paragraph(
+                      "<b>Recommended Remediation</b>",
+                      body_style
+                  )
+              )
+
+
+              story.append(
+                  paragraph(
+                      remediation,
+                      body_style
+                  )
+              )
+
+
+              # ------------------------------------------------------
+              # CVSS
+              # ------------------------------------------------------
+
+              story.append(
+                  Paragraph(
+                      "<b>CVSS Details</b>",
+                      body_style
+                  )
+              )
+
+
+              cvss_table = Table(
+
+                  [
+
+                      [
+                          paragraph(
+                              "CVSS Score",
+                              small_style
+                          ),
+
+                          paragraph(
+                              cvss_score,
+                              small_style
+                          )
+                      ],
+
+                      [
+                          paragraph(
+                              "CVSS Vector",
+                              small_style
+                          ),
+
+                          paragraph(
+                              cvss_vector,
+                              small_style
+                          )
+                      ]
+
+                  ],
+
+                  colWidths=[
+                      40 * mm,
+                      133 * mm
+                  ]
+
+              )
+
+
+              cvss_table.setStyle(
+                  TableStyle([
+
+                      (
+                          "BACKGROUND",
+                          (0, 0),
+                          (0, -1),
+                          colors.HexColor(
+                              "#F7F8FA"
+                          )
+                      ),
+
+                      (
+                          "BOX",
+                          (0, 0),
+                          (-1, -1),
+                          0.4,
+                          colors.HexColor(
+                              "#D0D6DC"
+                          )
+                      ),
+
+                      (
+                          "INNERGRID",
+                          (0, 0),
+                          (-1, -1),
+                          0.3,
+                          colors.HexColor(
+                              "#E1E5E9"
+                          )
+                      ),
+
+                      (
+                          "VALIGN",
+                          (0, 0),
+                          (-1, -1),
+                          "TOP"
+                      )
+
+                  ])
+              )
+
+
+              story.append(
+                  cvss_table
+              )
+
+
+              # ------------------------------------------------------
+              # REFERENCES
+              # ------------------------------------------------------
+
+              if references:
+
+                  story.append(
+                      Spacer(
+                          1,
+                          6
+                      )
+                  )
+
+
+                  story.append(
+                      Paragraph(
+                          "<b>References</b>",
+                          body_style
+                      )
+                  )
+
+
+                  for reference in references[:10]:
+
+                      story.append(
+                          paragraph(
+                              reference,
+                              small_style
+                          )
+                      )
+
+
+              story.append(
+                  Spacer(
+                      1,
+                      14
+                  )
+              )
+
+
+          # ==========================================================
+          # SCAN INFORMATION
+          # ==========================================================
+
+          story.append(
+              PageBreak()
+          )
+
+
+          story.append(
+              Paragraph(
+                  "3. Scan Information",
+                  heading_style
+              )
+          )
+
+
+          scan_information = [
+
+              [
+                  "Scanning Tool",
+                  "Snyk Container"
+              ],
+
+              [
+                  "Container Image",
+                  IMAGE_URI
+              ],
+
+              [
+                  "Report Type",
+                  "Filtered Vulnerability Assessment"
+              ],
+
+              [
+                  "Selected Filter",
+                  SEVERITY_FILTER.upper()
+              ],
+
+              [
+                  "Included Severities",
+                  included_severities
+              ],
+
+              [
+                  "Dependency Path",
+                  "Excluded from report"
+              ],
+
+              [
+                  "Security Gate",
+                  "Not applied - report only"
+              ],
+
+              [
+                  "Generated",
+                  datetime.utcnow().strftime(
+                      "%Y-%m-%d %H:%M UTC"
+                  )
+              ]
+
+          ]
+
+
+          scan_table = Table(
+
+              [
+
+                  [
+                      paragraph(
+                          key,
+                          body_style
+                      ),
+
+                      paragraph(
+                          value,
+                          body_style
+                      )
+
+                  ]
+
+                  for key, value in scan_information
+
+              ],
+
+              colWidths=[
+                  55 * mm,
+                  118 * mm
+              ]
+
+          )
+
+
+          scan_table.setStyle(
+              TableStyle([
+
+                  (
+                      "BACKGROUND",
+                      (0, 0),
+                      (0, -1),
+                      colors.HexColor(
+                          "#F1F4F7"
+                      )
+                  ),
+
+                  (
+                      "BOX",
+                      (0, 0),
+                      (-1, -1),
+                      0.5,
+                      colors.HexColor(
+                          "#C3CCD4"
+                      )
+                  ),
+
+                  (
+                      "INNERGRID",
+                      (0, 0),
+                      (-1, -1),
+                      0.3,
+                      colors.HexColor(
+                          "#DCE2E7"
+                      )
+                  ),
+
+                  (
+                      "VALIGN",
+                      (0, 0),
+                      (-1, -1),
+                      "TOP"
+                  )
+
+              ])
+          )
+
+
+          story.append(
+              scan_table
+          )
+
+
+          story.append(
+              Spacer(
+                  1,
+                  12
+              )
+          )
+
+
+          story.append(
+              paragraph(
+                  (
+                      "Note: Vulnerability summaries, descriptions "
+                      "and remediation information are based on "
+                      "information returned by Snyk. If Snyk does "
+                      "not provide a specific field, the report "
+                      "explicitly states 'Not provided by Snyk'."
+                  ),
+                  small_style
+              )
+          )
+
+
+          # ==========================================================
+          # BUILD PDF
+          # ==========================================================
+
+          print(
+              "Building PDF..."
+          )
+
+
+          document.build(
+              story,
+              onFirstPage=footer,
+              onLaterPages=footer
+          )
+
+
+          # ==========================================================
+          # TXT REPORT
+          # ==========================================================
+
+          with open(
+              OUTPUT_TXT,
+              "w",
+              encoding="utf-8"
+          ) as report:
+
+              report.write(
+                  "SNYK CONTAINER SECURITY REPORT\n"
+              )
+
+              report.write(
+                  "=" * 80 + "\n\n"
+              )
+
+              report.write(
+                  f"Container Image : {IMAGE_URI}\n"
+              )
+
+              report.write(
+                  "Scanning Tool   : Snyk Container\n"
+              )
+
+              report.write(
+                  "Report Type     : Filtered Vulnerability Assessment\n"
+              )
+
+              report.write(
+                  f"Selected Filter : {SEVERITY_FILTER.upper()}\n"
+              )
+
+              report.write(
+                  f"Included        : {included_severities}\n"
+              )
+
+              report.write(
+                  f"Low Severity    : {low_status}\n"
+              )
+
+              report.write(
+                  "Dependency Path : Excluded\n"
+              )
+
+              report.write(
+                  "Security Gate   : Not applied - report only\n"
+              )
+
+              report.write(
+                  "\nEXECUTIVE SUMMARY\n"
+              )
+
+              report.write(
+                  "-" * 80 + "\n"
+              )
+
+              report.write(
+                  f"Total Findings : {len(filtered)}\n"
+              )
+
+              report.write(
+                  f"Critical       : {counts['critical']}\n"
+              )
+
+              report.write(
+                  f"High           : {counts['high']}\n"
+              )
+
+              report.write(
+                  f"Medium         : {counts['medium']}\n"
+              )
+
+              report.write(
+                  f"Low            : {counts['low']}\n"
+              )
+
+              report.write(
+                  "\nLOW SEVERITY INFORMATION\n"
+              )
+
+              report.write(
+                  "-" * 80 + "\n"
+              )
+
+              report.write(
+                  f"{low_status}\n"
+              )
+
+              report.write(
+                  "\nDETAILED FINDINGS\n"
+              )
+
+              report.write(
+                  "=" * 80 + "\n"
+              )
+
+
+              for index, vulnerability in enumerate(
+                  filtered,
+                  1
+              ):
+
+                  report.write(
+                      f"\n[{index}] "
+                      f"{get_value(vulnerability, 'title', 'name')}\n"
+                  )
+
+                  report.write(
+                      "-" * 80 + "\n"
+                  )
+
+                  report.write(
+                      f"Severity          : "
+                      f"{get_value(vulnerability, 'severity')}\n"
+                  )
+
+                  report.write(
+                      f"Vulnerability ID  : "
+                      f"{get_vulnerability_id(vulnerability)}\n"
+                  )
+
+                  report.write(
+                      f"Affected Package  : "
+                      f"{get_value(vulnerability, 'packageName', 'name')}\n"
+                  )
+
+                  report.write(
+                      f"Installed Version : "
+                      f"{get_value(vulnerability, 'version', 'installedVersion')}\n"
+                  )
+
+                  report.write(
+                      f"Fixed Version     : "
+                      f"{get_value(vulnerability, 'fixedIn', 'nearestFixedInVersion', 'fixedVersion')}\n"
+                  )
+
+                  report.write(
+                      f"CVSS Score        : "
+                      f"{get_cvss_score(vulnerability)}\n"
+                  )
+
+                  report.write(
+                      f"CVSS Vector       : "
+                      f"{get_cvss_vector(vulnerability)}\n"
+                  )
+
+                  report.write(
+                      "\nVulnerability Summary\n"
+                  )
+
+                  report.write(
+                      f"{get_vulnerability_summary(vulnerability)}\n"
+                  )
+
+                  report.write(
+                      "\nWhy is this a vulnerability?\n"
+                  )
+
+                  report.write(
+                      f"{get_description(vulnerability)}\n"
+                  )
+
+                  report.write(
+                      "\nWhere is the issue in the image?\n"
+                  )
+
+                  report.write(
+                      f"{get_value(vulnerability, 'introducedBy', 'dockerfileInstruction', 'introduced')}\n"
+                  )
+
+                  report.write(
+                      "\nRecommended Remediation\n"
+                  )
+
+                  report.write(
+                      f"{get_value(vulnerability, 'upgradePath', 'remediation', 'recommendation')}\n"
+                  )
+
+
+                  references = get_references(
+                      vulnerability
+                  )
+
+
+                  if references:
+
+                      report.write(
+                          "\nReferences\n"
+                      )
+
+
+                      for reference in references[:10]:
+
+                          report.write(
+                              f"- {reference}\n"
+                          )
+
+
+                  report.write(
+                      "\n"
+                  )
+
+
+          # ==========================================================
+          # VERIFY FILES
+          # ==========================================================
+
+          if not os.path.exists(
+              OUTPUT_PDF
+          ):
+
+              raise RuntimeError(
+                  "PDF was not generated."
+              )
+
+
+          if not os.path.exists(
+              OUTPUT_TXT
+          ):
+
+              raise RuntimeError(
+                  "TXT report was not generated."
+              )
+
+
+          pdf_size = os.path.getsize(
+              OUTPUT_PDF
+          )
+
+
+          if pdf_size == 0:
+
+              raise RuntimeError(
+                  "Generated PDF is empty."
+              )
+
+
+          print("")
+          print(
+              "=================================================="
+          )
+          print(
+              "FILTERED PDF REPORT GENERATED SUCCESSFULLY"
+          )
+          print(
+              "=================================================="
+          )
+          print(
+              f"PDF      : {OUTPUT_PDF}"
+          )
+          print(
+              f"TXT      : {OUTPUT_TXT}"
+          )
+          print(
+              f"Findings : {len(filtered)}"
+          )
+          print(
+              f"Filter   : {SEVERITY_FILTER.upper()}"
+          )
+          print(
+              f"Included : {included_severities}"
+          )
+          print(
+              f"Low      : {low_status}"
+          )
+          print(
+              "=================================================="
+          )
 
           PY
+
+
+      # ============================================================
+      # UPLOAD REPORTS
+      # ============================================================
+
+      - name: Upload filtered Snyk security report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: snyk-filtered-container-report
+          path: |
+            snyk-filtered-raw.json
+            snyk-filtered-report.txt
+            snyk-filtered-report.pdf
+          retention-days: 30
+          if-no-files-found: warn
+
+
+      # ============================================================
+      # FINAL STATUS
+      #
+      # REPORT ONLY
+      # NO SECURITY GATE
+      # ============================================================
+
+      - name: Report completed
+        if: always()
+        run: |
+
+          echo "=================================================="
+          echo "SNYK FILTERED REPORT COMPLETED"
+          echo "=================================================="
+
+          echo "Image          : $IMAGE_URI"
+          echo "Filter         : $SEVERITY_FILTER"
+          echo "Snyk Exit Code : ${SNYK_EXIT_CODE:-unknown}"
+
+          echo ""
+          echo "Included:"
+          echo "  Critical + High + Medium (Low Excluded)"
+
+          echo ""
+          echo "Security Gate: NOT APPLIED"
+          echo "Mode         : REPORT ONLY"
+
+          echo ""
+          echo "Artifacts:"
+          echo "  - snyk-filtered-report.pdf"
+          echo "  - snyk-filtered-report.txt"
+          echo "  - snyk-filtered-raw.json"
+
+          echo "=================================================="
