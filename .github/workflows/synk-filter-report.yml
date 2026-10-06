@@ -1,2638 +1,5229 @@
-name: Snyk Container - Filtered Security Report
+name: Snyk - Filter Security Report
+
+
 
 on:
+
   workflow_dispatch:
+
     inputs:
 
+
+
       image_uri:
+
         description: "ECR image URI"
+
         required: true
+
         type: string
+
+
 
       aws_region:
+
         description: "AWS Region"
+
         required: true
+
         default: "ap-south-1"
+
         type: string
 
+
+
       severity_filter:
+
         description: "HIGH = Critical + High + Medium"
+
         required: true
+
         default: "high"
+
         type: choice
+
         options:
+
           - critical
+
           - high
+
           - medium
+
           - low
 
+
+
 permissions:
+
   contents: read
+
+
 
 jobs:
 
+
+
   snyk-filtered-report:
+
+
 
     name: Snyk Filtered Container Security Report
 
+
+
     runs-on: ubuntu-latest
 
+
+
     env:
+
       IMAGE_URI: ${{ inputs.image_uri }}
+
       AWS_REGION: ${{ inputs.aws_region }}
+
       SEVERITY_FILTER: ${{ inputs.severity_filter }}
+
+
 
     steps:
 
-      # ============================================================
-      # CHECKOUT
+
+
       # ============================================================
 
+      # CHECKOUT
+
+      # ============================================================
+
+
+
       - name: Checkout repository
+
         uses: actions/checkout@v4
 
 
-      # ============================================================
-      # AWS CREDENTIALS
+
+
+
       # ============================================================
 
+      # AWS CREDENTIALS
+
+      # ============================================================
+
+
+
       - name: Configure AWS credentials
+
         uses: aws-actions/configure-aws-credentials@v6
+
         with:
+
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
           aws-region: ${{ inputs.aws_region }}
 
 
-      # ============================================================
-      # ECR LOGIN
+
+
+
       # ============================================================
 
+      # ECR LOGIN
+
+      # ============================================================
+
+
+
       - name: Login to Amazon ECR
+
         uses: aws-actions/amazon-ecr-login@v2
 
 
-      # ============================================================
-      # VERIFY IMAGE
+
+
+
       # ============================================================
 
+      # VERIFY IMAGE
+
+      # ============================================================
+
+
+
       - name: Verify ECR image
+
         run: |
+
+
 
           set -e
 
-          echo "=================================================="
-          echo "ECR IMAGE VALIDATION"
+
+
           echo "=================================================="
 
+          echo "ECR IMAGE VALIDATION"
+
+          echo "=================================================="
+
+
+
           echo "Image URI : $IMAGE_URI"
+
           echo "AWS Region: $AWS_REGION"
+
+
 
           IMAGE_WITHOUT_REGISTRY="${IMAGE_URI#*/}"
 
+
+
           IMAGE_REPOSITORY="${IMAGE_WITHOUT_REGISTRY%:*}"
+
+
 
           IMAGE_TAG="${IMAGE_WITHOUT_REGISTRY##*:}"
 
+
+
           if [ "$IMAGE_REPOSITORY" = "$IMAGE_WITHOUT_REGISTRY" ]; then
+
             echo "ERROR: Image tag is missing."
+
             echo "Expected:"
+
             echo "ACCOUNT.dkr.ecr.REGION.amazonaws.com/repository:tag"
+
             exit 1
+
           fi
 
+
+
           echo "Repository: $IMAGE_REPOSITORY"
+
           echo "Tag       : $IMAGE_TAG"
 
+
+
           aws ecr describe-images \
+
             --repository-name "$IMAGE_REPOSITORY" \
+
             --image-ids imageTag="$IMAGE_TAG"
+
+
 
           echo "ECR image exists."
 
 
-      # ============================================================
-      # PULL IMAGE
+
+
+
       # ============================================================
 
+      # PULL IMAGE
+
+      # ============================================================
+
+
+
       - name: Pull Docker image
+
         run: |
+
+
 
           set -e
 
+
+
           echo "=================================================="
+
           echo "PULLING DOCKER IMAGE"
+
           echo "=================================================="
+
+
 
           docker pull "$IMAGE_URI"
 
+
+
           echo ""
+
           echo "Docker image pulled successfully."
 
 
+
+
+
       # ============================================================
+
       # INSTALL SNYK + REPORTLAB
+
       # ============================================================
+
+
 
       - name: Install Snyk CLI and PDF dependencies
+
         run: |
 
+
+
           set -e
+
+
 
           echo "Installing Snyk CLI..."
 
+
+
           npm install --global snyk
+
+
 
           echo "Installing ReportLab..."
 
+
+
           python3 -m pip install --upgrade pip
+
+
 
           python3 -m pip install reportlab
 
-          echo ""
-          echo "Snyk version:"
-          snyk --version
+
 
           echo ""
+
+          echo "Snyk version:"
+
+          snyk --version
+
+
+
+          echo ""
+
           echo "Python version:"
+
           python3 --version
 
 
-      # ============================================================
-      # VERIFY SNYK TOKEN
+
+
+
       # ============================================================
 
+      # VERIFY SNYK TOKEN
+
+      # ============================================================
+
+
+
       - name: Verify Snyk token
+
         env:
+
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+
         run: |
+
+
 
           set -e
 
+
+
           if [ -z "$SNYK_TOKEN" ]; then
+
             echo "ERROR: SNYK_TOKEN is not configured."
+
             exit 1
+
           fi
+
+
 
           echo "SNYK_TOKEN is configured."
 
 
-      # ============================================================
-      # SNYK SCAN
-      #
-      # We scan ALL severities first.
-      #
-      # Filtering is done afterwards because:
-      #
-      # HIGH requirement:
-      # Critical + High + Medium
-      #
-      # This is different from Snyk's normal severity threshold.
+
+
+
       # ============================================================
 
+      # SNYK SCAN
+
+      #
+
+      # We scan ALL severities first.
+
+      #
+
+      # Filtering is done afterwards because:
+
+      #
+
+      # HIGH requirement:
+
+      # Critical + High + Medium
+
+      #
+
+      # This is different from Snyk's normal severity threshold.
+
+      # ============================================================
+
+
+
       - name: Run Snyk container scan
+
         id: snyk_scan
+
         continue-on-error: true
+
         env:
+
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+
         run: |
+
+
 
           set +e
 
-          echo "=================================================="
-          echo "SNYK CONTAINER SCAN"
+
+
           echo "=================================================="
 
+          echo "SNYK CONTAINER SCAN"
+
+          echo "=================================================="
+
+
+
           echo "Image:"
+
           echo "$IMAGE_URI"
+
+
 
           echo ""
 
+
+
           snyk container test "$IMAGE_URI" \
+
             --json-file-output=snyk-filtered-raw.json
+
+
 
           SNYK_EXIT_CODE=$?
 
+
+
           echo ""
+
           echo "Snyk exit code: $SNYK_EXIT_CODE"
+
+
 
           echo "SNYK_EXIT_CODE=$SNYK_EXIT_CODE" >> "$GITHUB_ENV"
 
+
+
           # Exit code 1 means vulnerabilities were found.
+
           #
+
           # This is a REPORT-ONLY pipeline.
+
           #
+
           # Therefore we intentionally do not fail the workflow.
+
+
 
           exit 0
 
 
-      # ============================================================
-      # GENERATE FILTERED PDF REPORT
+
+
+
       # ============================================================
 
+      # GENERATE FILTERED PDF REPORT
+
+      # ============================================================
+
+
+
       - name: Generate filtered PDF report
+
         if: always()
+
         env:
+
           INPUT_FILE: snyk-filtered-raw.json
+
           OUTPUT_PDF: snyk-filtered-report.pdf
+
           OUTPUT_TXT: snyk-filtered-report.txt
+
           IMAGE_URI: ${{ inputs.image_uri }}
+
           SEVERITY_FILTER: ${{ inputs.severity_filter }}
+
         run: |
+
+
 
           set -e
 
+
+
           echo "=================================================="
+
           echo "GENERATING FILTERED PDF REPORT"
+
           echo "=================================================="
+
+
 
           python3 <<'PY'
 
+
+
           import json
+
           import os
+
           import re
+
           from datetime import datetime
 
+
+
           from reportlab.lib import colors
+
           from reportlab.lib.enums import TA_CENTER
+
           from reportlab.lib.pagesizes import A4
+
           from reportlab.lib.styles import (
+
               getSampleStyleSheet,
+
               ParagraphStyle
+
           )
+
           from reportlab.lib.units import mm
+
           from reportlab.platypus import (
+
               SimpleDocTemplate,
+
               Paragraph,
+
               Spacer,
+
               Table,
+
               TableStyle,
+
               PageBreak
+
           )
 
 
+
+
+
           # ==========================================================
+
           # CONFIGURATION
+
           # ==========================================================
+
+
 
           INPUT_FILE = os.environ.get(
+
               "INPUT_FILE",
+
               "snyk-filtered-raw.json"
+
           )
+
+
 
           OUTPUT_PDF = os.environ.get(
+
               "OUTPUT_PDF",
+
               "snyk-filtered-report.pdf"
+
           )
+
+
 
           OUTPUT_TXT = os.environ.get(
+
               "OUTPUT_TXT",
+
               "snyk-filtered-report.txt"
+
           )
+
+
 
           IMAGE_URI = os.environ.get(
+
               "IMAGE_URI",
+
               ""
+
           )
 
+
+
           SEVERITY_FILTER = os.environ.get(
+
               "SEVERITY_FILTER",
+
               "high"
+
           ).lower()
 
 
+
+
+
           # ==========================================================
+
           # LOAD SNYK JSON
+
           # ==========================================================
+
+
 
           if not os.path.exists(INPUT_FILE):
 
+
+
               print(
+
                   f"WARNING: {INPUT_FILE} does not exist."
+
               )
 
+
+
               snyk_data = {
+
                   "vulnerabilities": []
+
               }
+
+
 
           else:
 
+
+
               try:
 
+
+
                   with open(
+
                       INPUT_FILE,
+
                       "r",
+
                       encoding="utf-8"
+
                   ) as file:
+
+
 
                       snyk_data = json.load(file)
 
+
+
               except Exception as error:
 
+
+
                   print(
+
                       f"WARNING: Failed to read Snyk JSON: {error}"
+
                   )
 
+
+
                   snyk_data = {
+
                       "vulnerabilities": []
+
                   }
 
 
+
+
+
           vulnerabilities = snyk_data.get(
+
               "vulnerabilities",
+
               []
+
           )
 
 
+
+
+
           if not isinstance(
+
               vulnerabilities,
+
               list
+
           ):
+
+
 
               vulnerabilities = []
 
 
+
+
+
           print(
+
               f"Total Snyk findings: {len(vulnerabilities)}"
+
           )
 
 
+
+
+
           # ==========================================================
+
           # FILTER RULES
+
           #
+
           # HIGH = Critical + High + Medium
+
           # ==========================================================
+
+
 
           filter_rules = {
 
+
+
               "critical": {
+
                   "critical"
+
               },
+
+
 
               "high": {
+
                   "critical",
+
                   "high",
+
                   "medium"
+
               },
+
+
 
               "medium": {
+
                   "critical",
+
                   "high",
+
                   "medium"
+
               },
 
+
+
               "low": {
+
                   "critical",
+
                   "high",
+
                   "medium",
+
                   "low"
+
               }
+
+
 
           }
 
 
+
+
+
           allowed_severities = filter_rules.get(
+
               SEVERITY_FILTER,
+
               {
+
                   "critical",
+
                   "high",
+
                   "medium"
+
               }
+
           )
+
+
+
 
 
           filtered = []
 
 
+
+
+
           for vulnerability in vulnerabilities:
 
+
+
               severity = str(
+
                   vulnerability.get(
+
                       "severity",
+
                       ""
+
                   )
+
               ).lower().strip()
+
+
+
 
 
               if severity in allowed_severities:
 
+
+
                   filtered.append(
+
                       vulnerability
+
                   )
 
 
+
+
+
           # ==========================================================
+
           # SORT BY SEVERITY
+
           # ==========================================================
+
+
 
           severity_order = {
 
+
+
               "critical": 0,
+
               "high": 1,
+
               "medium": 2,
+
               "low": 3
+
+
 
           }
 
 
+
+
+
           filtered.sort(
+
               key=lambda item:
+
                   severity_order.get(
+
                       str(
+
                           item.get(
+
                               "severity",
+
                               ""
+
                           )
+
                       ).lower(),
+
                       99
+
                   )
+
           )
 
 
+
+
+
           # ==========================================================
+
           # GENERIC CLEAN FUNCTION
+
           # ==========================================================
+
+
 
           def clean(value):
 
+
+
               if value is None:
+
                   return ""
 
 
+
+
+
               if isinstance(
+
                   value,
+
                   str
+
               ):
+
+
 
                   return value.strip()
 
 
+
+
+
               if isinstance(
+
                   value,
+
                   list
+
               ):
+
+
 
                   values = []
 
 
+
+
+
                   for item in value:
 
+
+
                       if isinstance(
+
                           item,
+
                           dict
+
                       ):
+
+
 
                           if item.get("value"):
 
+
+
                               values.append(
+
                                   str(
+
                                       item["value"]
+
                                   )
+
                               )
+
+
 
                           elif item.get("url"):
 
+
+
                               values.append(
+
                                   str(
+
                                       item["url"]
+
                                   )
+
                               )
+
+
 
                           elif item.get("name"):
 
+
+
                               values.append(
+
                                   str(
+
                                       item["name"]
+
                                   )
+
                               )
+
+
 
                           else:
 
+
+
                               values.append(
+
                                   str(item)
+
                               )
+
+
 
                       else:
 
+
+
                           values.append(
+
                               str(item)
+
                           )
+
+
+
 
 
                   return ", ".join(values)
 
 
+
+
+
               if isinstance(
+
                   value,
+
                   dict
+
               ):
 
+
+
                   for key in [
+
                       "value",
+
                       "version",
+
                       "name",
+
                       "url",
+
                       "score",
+
                       "baseScore"
+
                   ]:
+
+
 
                       if value.get(key) is not None:
 
+
+
                           return str(
+
                               value[key]
+
                           )
+
+
+
 
 
                   return str(value)
 
 
+
+
+
               return str(value)
 
 
-          # ==========================================================
-          # GET VALUE
+
+
+
           # ==========================================================
 
+          # GET VALUE
+
+          # ==========================================================
+
+
+
           def get_value(
+
               vulnerability,
+
               *keys
+
           ):
+
+
 
               for key in keys:
 
+
+
                   if key not in vulnerability:
+
                       continue
 
 
+
+
+
                   value = clean(
+
                       vulnerability.get(
+
                           key
+
                       )
+
                   )
+
+
+
 
 
                   if value:
 
+
+
                       return value
+
+
+
 
 
               return "Not provided by Snyk"
 
 
+
+
+
           # ==========================================================
+
           # VULNERABILITY DESCRIPTION
+
           # ==========================================================
+
+
 
           def get_description(
+
               vulnerability
+
           ):
 
+
+
               description = clean(
+
                   vulnerability.get(
+
                       "description"
+
                   )
+
               )
+
+
+
 
 
               if description:
 
+
+
                   return description
 
 
+
+
+
               message = clean(
+
                   vulnerability.get(
+
                       "message"
+
                   )
+
               )
+
+
+
 
 
               if message:
 
+
+
                   return message
 
 
+
+
+
               summary = clean(
+
                   vulnerability.get(
+
                       "summary"
+
                   )
+
               )
+
+
+
 
 
               if summary:
 
+
+
                   return summary
+
+
+
 
 
               return (
+
                   "Snyk identified this vulnerability, "
+
                   "but no detailed description was provided "
+
                   "in the scan result."
+
               )
 
 
+
+
+
           # ==========================================================
+
           # VULNERABILITY SUMMARY
+
           #
+
           # Short summary for every finding.
+
           # ==========================================================
+
+
 
           def get_vulnerability_summary(
+
               vulnerability
+
           ):
 
+
+
               summary = clean(
+
                   vulnerability.get(
+
                       "summary"
+
                   )
+
               )
+
+
+
 
 
               if summary:
 
+
+
                   return summary
 
 
+
+
+
               description = get_description(
+
                   vulnerability
+
               )
 
 
+
+
+
               description = re.sub(
+
                   r"\s+",
+
                   " ",
+
                   description
+
               ).strip()
+
+
+
 
 
               if description:
 
+
+
                   sentences = re.split(
+
                       r"(?<=[.!?])\s+",
+
                       description
+
                   )
+
+
+
 
 
                   if sentences:
 
+
+
                       return sentences[0]
+
+
+
 
 
                   return description
 
 
+
+
+
               title = clean(
+
                   vulnerability.get(
+
                       "title"
+
                   )
+
               )
+
+
+
 
 
               if title:
 
+
+
                   return title
 
 
+
+
+
               return (
+
                   "Vulnerability identified by Snyk."
+
               )
 
 
+
+
+
           # ==========================================================
+
           # VULNERABILITY ID
+
           # ==========================================================
+
+
 
           def get_vulnerability_id(
+
               vulnerability
+
           ):
 
+
+
               vulnerability_id = get_value(
+
                   vulnerability,
+
                   "id",
+
                   "issueId"
+
               )
+
+
+
 
 
               if vulnerability_id != "Not provided by Snyk":
 
+
+
                   return vulnerability_id
 
 
+
+
+
               identifiers = vulnerability.get(
+
                   "identifiers",
+
                   {}
+
               )
 
 
+
+
+
               if isinstance(
+
                   identifiers,
+
                   dict
+
               ):
+
+
 
                   values = []
 
 
+
+
+
                   for key in [
+
                       "CVE",
+
                       "CWE"
+
                   ]:
 
+
+
                       ids = identifiers.get(
+
                           key,
+
                           []
+
                       )
 
 
+
+
+
                       if isinstance(
+
                           ids,
+
                           list
+
                       ):
 
+
+
                           values.extend(
+
                               str(x)
+
                               for x in ids
+
                           )
+
+
+
 
 
                       elif ids:
 
+
+
                           values.append(
+
                               str(ids)
+
                           )
+
+
+
 
 
                   if values:
 
+
+
                       return ", ".join(
+
                           values
+
                       )
+
+
+
 
 
               return "Not provided by Snyk"
 
 
+
+
+
           # ==========================================================
+
           # CVSS SCORE
+
           # ==========================================================
+
+
 
           def get_cvss_score(
+
               vulnerability
+
           ):
 
+
+
               for key in [
+
                   "cvssScore",
+
                   "CVSSv4Score",
+
                   "CVSSv3Score"
+
               ]:
 
+
+
                   value = vulnerability.get(
+
                       key
+
                   )
+
+
+
 
 
                   if value is not None:
 
+
+
                       value = clean(
+
                           value
+
                       )
 
 
+
+
+
                       if value:
+
+
 
                           return value
 
 
+
+
+
               for key in [
+
                   "CVSSv4",
+
                   "CVSSv3",
+
                   "cvss"
+
               ]:
 
+
+
                   value = vulnerability.get(
+
                       key
+
                   )
 
 
+
+
+
                   if isinstance(
+
                       value,
+
                       dict
+
                   ):
 
+
+
                       for score_key in [
+
                           "score",
+
                           "baseScore"
+
                       ]:
 
+
+
                           if value.get(
+
                               score_key
+
                           ) is not None:
 
+
+
                               return str(
+
                                   value[
+
                                       score_key
+
                                   ]
+
                               )
+
+
+
 
 
               return "Not provided by Snyk"
 
 
+
+
+
           # ==========================================================
+
           # CVSS VECTOR
+
           # ==========================================================
+
+
 
           def get_cvss_vector(
+
               vulnerability
+
           ):
 
+
+
               for key in [
+
                   "CVSSv4",
+
                   "CVSSv3",
+
                   "cvss",
+
                   "cvssVector"
+
               ]:
 
+
+
                   value = vulnerability.get(
+
                       key
+
                   )
 
 
+
+
+
                   if isinstance(
+
                       value,
+
                       dict
+
                   ):
 
+
+
                       for vector_key in [
+
                           "vectorString",
+
                           "vector",
+
                           "value"
+
                       ]:
 
+
+
                           if value.get(
+
                               vector_key
+
                           ):
 
+
+
                               return str(
+
                                   value[
+
                                       vector_key
+
                                   ]
+
                               )
+
+
+
 
 
                   elif isinstance(
+
                       value,
+
                       str
+
                   ):
+
+
 
                       if value:
 
+
+
                           return value
+
+
+
 
 
               return "Not provided by Snyk"
 
 
-          # ==========================================================
-          # REFERENCES
+
+
+
           # ==========================================================
 
+          # REFERENCES
+
+          # ==========================================================
+
+
+
           def get_references(
+
               vulnerability
+
           ):
+
+
 
               references = []
 
 
+
+
+
               refs = vulnerability.get(
+
                   "references",
+
                   []
+
               )
 
 
+
+
+
               if isinstance(
+
                   refs,
+
                   list
+
               ):
+
+
 
                   for reference in refs:
 
+
+
                       if isinstance(
+
                           reference,
+
                           dict
+
                       ):
 
+
+
                           url = reference.get(
+
                               "url"
+
                           )
+
+
+
 
 
                           if url:
 
+
+
                               references.append(
+
                                   str(url)
+
                               )
 
 
+
+
+
                       elif isinstance(
+
                           reference,
+
                           str
+
                       ):
 
+
+
                           references.append(
+
                               reference
+
                           )
 
 
+
+
+
               for key in [
+
                   "url",
+
                   "info"
+
               ]:
 
+
+
                   value = vulnerability.get(
+
                       key
+
                   )
+
+
+
 
 
                   if (
+
                       isinstance(
+
                           value,
+
                           str
+
                       )
+
                       and value.startswith(
+
                           "http"
+
                       )
+
                   ):
 
+
+
                       references.append(
+
                           value
+
                       )
+
+
+
 
 
               return list(
+
                   dict.fromkeys(
+
                       references
+
                   )
+
               )
 
 
+
+
+
           # ==========================================================
+
           # PDF TEXT HELPER
+
           # ==========================================================
+
+
 
           def paragraph(
+
               value,
+
               style
+
           ):
 
+
+
               value = str(
+
                   value
+
               )
+
+
+
 
 
               value = (
+
                   value
+
                   .replace(
+
                       "&",
+
                       "&amp;"
+
                   )
+
                   .replace(
+
                       "<",
+
                       "&lt;"
+
                   )
+
                   .replace(
+
                       ">",
+
                       "&gt;"
+
                   )
+
                   .replace(
+
                       "\n",
+
                       "<br/>"
+
                   )
+
               )
+
+
+
 
 
               return Paragraph(
+
                   value,
+
                   style
+
               )
 
 
+
+
+
           # ==========================================================
+
           # PDF STYLES
+
           # ==========================================================
+
+
 
           styles = getSampleStyleSheet()
 
 
+
+
+
           title_style = ParagraphStyle(
+
               "ReportTitle",
+
               parent=styles["Title"],
+
               fontSize=23,
+
               leading=28,
+
               alignment=TA_CENTER,
+
               spaceAfter=12
+
           )
+
+
+
 
 
           subtitle_style = ParagraphStyle(
+
               "ReportSubtitle",
+
               parent=styles["Normal"],
+
               fontSize=10,
+
               leading=14,
+
               alignment=TA_CENTER,
+
               textColor=colors.HexColor(
+
                   "#555555"
+
               ),
+
               spaceAfter=20
+
           )
+
+
+
 
 
           heading_style = ParagraphStyle(
+
               "ReportHeading",
+
               parent=styles["Heading2"],
+
               fontSize=15,
+
               leading=19,
+
               spaceBefore=10,
+
               spaceAfter=8
+
           )
+
+
+
 
 
           finding_style = ParagraphStyle(
+
               "FindingHeading",
+
               parent=styles["Heading3"],
+
               fontSize=12,
+
               leading=16,
+
               spaceBefore=4,
+
               spaceAfter=7
+
           )
+
+
+
 
 
           body_style = ParagraphStyle(
+
               "Body",
+
               parent=styles["BodyText"],
+
               fontSize=9,
+
               leading=13,
+
               spaceAfter=6
+
           )
+
+
+
 
 
           small_style = ParagraphStyle(
+
               "Small",
+
               parent=styles["BodyText"],
+
               fontSize=7.5,
+
               leading=10,
+
               textColor=colors.HexColor(
+
                   "#555555"
+
               )
+
           )
+
+
+
 
 
           summary_style = ParagraphStyle(
+
               "Summary",
+
               parent=styles["BodyText"],
+
               fontSize=9,
+
               leading=13,
+
               spaceAfter=8
+
           )
 
 
-          # ==========================================================
-          # FOOTER
+
+
+
           # ==========================================================
 
+          # FOOTER
+
+          # ==========================================================
+
+
+
           def footer(
+
               canvas,
+
               doc
+
           ):
+
+
 
               canvas.saveState()
 
+
+
               canvas.setFont(
+
                   "Helvetica",
+
                   8
+
               )
+
+
 
               canvas.setFillColor(
+
                   colors.HexColor(
+
                       "#666666"
+
                   )
+
               )
+
+
 
               canvas.drawString(
+
                   16 * mm,
+
                   9 * mm,
+
                   "Snyk Container Security Report"
+
               )
 
+
+
               canvas.drawRightString(
+
                   194 * mm,
+
                   9 * mm,
+
                   f"Page {doc.page}"
+
               )
+
+
 
               canvas.restoreState()
 
 
+
+
+
           # ==========================================================
+
           # COUNTS
+
           # ==========================================================
+
+
 
           counts = {
 
+
+
               "critical": 0,
+
               "high": 0,
+
               "medium": 0,
+
               "low": 0
+
+
 
           }
 
 
+
+
+
           for vulnerability in filtered:
 
+
+
               severity = str(
+
                   vulnerability.get(
+
                       "severity",
+
                       ""
+
                   )
+
               ).lower()
+
+
+
 
 
               if severity in counts:
 
+
+
                   counts[
+
                       severity
+
                   ] += 1
+
+
+
 
 
           # Count original LOW findings.
 
+
+
           original_low_count = sum(
+
+
 
               1
 
+
+
               for vulnerability in vulnerabilities
 
+
+
               if str(
+
                   vulnerability.get(
+
                       "severity",
+
                       ""
+
                   )
+
               ).lower() == "low"
+
+
 
           )
 
 
+
+
+
           # ==========================================================
+
           # REPORT SEVERITY DESCRIPTION
+
           # ==========================================================
+
+
 
           if SEVERITY_FILTER == "critical":
 
+
+
               included_severities = "Critical"
 
+
+
           elif SEVERITY_FILTER in [
+
               "high",
+
               "medium"
+
           ]:
 
+
+
               included_severities = (
-                  "Critical + High + Medium"
+
+                  "Critical + High + Medium (Low has been excluded)"
+
               )
+
+
 
           else:
 
+
+
               included_severities = (
-                  "Critical + High + Medium (Low has been excluded)"
+
+                  "Critical + High + Medium + Low"
+
               )
 
 
+
+
+
           # ==========================================================
+
           # LOW MESSAGE
+
           # ==========================================================
+
+
 
           if (
+
               original_low_count > 0
+
               and "low" not in allowed_severities
+
           ):
 
+
+
               low_status = (
+
                   "Low severity findings have been "
+
                   "excluded from this filtered report "
+
                   "and are available in the Full Snyk "
+
                   "Security Report."
+
               )
+
+
 
           elif "low" in allowed_severities:
 
+
+
               low_status = (
+
                   "Low severity findings are included "
+
                   "in this report."
+
               )
+
+
 
           else:
 
+
+
               low_status = (
+
                   "No Low severity findings were identified."
+
               )
 
 
+
+
+
           # ==========================================================
+
           # CREATE PDF
+
           # ==========================================================
+
+
 
           document = SimpleDocTemplate(
 
+
+
               OUTPUT_PDF,
+
+
 
               pagesize=A4,
 
+
+
               rightMargin=16 * mm,
+
+
 
               leftMargin=16 * mm,
 
+
+
               topMargin=16 * mm,
+
+
 
               bottomMargin=16 * mm
 
+
+
           )
+
+
+
 
 
           story = []
 
 
+
+
+
           # ==========================================================
+
           # COVER PAGE
+
           # ==========================================================
 
+
+
           story.append(
+
               Spacer(
+
                   1,
+
                   20 * mm
+
               )
+
           )
 
 
+
+
+
           story.append(
+
               Paragraph(
+
                   "SNYK CONTAINER<br/>SECURITY REPORT",
+
                   title_style
+
               )
+
           )
+
+
+
 
 
           story.append(
+
               Paragraph(
+
                   "Filtered Vulnerability Assessment",
+
                   subtitle_style
+
               )
+
           )
+
+
+
 
 
           cover_data = [
 
+
+
               [
+
                   "Container Image",
+
                   IMAGE_URI
+
               ],
 
+
+
               [
+
                   "Scanning Tool",
+
                   "Snyk Container"
+
               ],
 
+
+
               [
+
                   "Report Type",
+
                   "Filtered Vulnerability Assessment"
+
               ],
 
+
+
               [
+
                   "Selected Filter",
+
                   SEVERITY_FILTER.upper()
+
               ],
 
+
+
               [
+
                   "Included Severities",
+
                   included_severities
+
               ],
 
-              [
-                  "Low Severity",
-                  low_status
-              ],
+
 
               [
+
                   "Generated",
+
                   datetime.utcnow().strftime(
+
                       "%Y-%m-%d %H:%M UTC"
+
                   )
+
               ]
 
+
+
           ]
+
+
+
 
 
           cover_table = Table(
 
+
+
               [
 
+
+
                   [
-                      paragraph(
-                          key,
-                          body_style
-                      ),
 
                       paragraph(
-                          value,
+
+                          key,
+
                           body_style
+
+                      ),
+
+
+
+                      paragraph(
+
+                          value,
+
+                          body_style
+
                       )
+
+
 
                   ]
 
+
+
                   for key, value in cover_data
+
+
 
               ],
 
+
+
               colWidths=[
+
                   48 * mm,
+
                   125 * mm
+
               ]
 
+
+
           )
+
+
+
 
 
           cover_table.setStyle(
+
               TableStyle([
 
+
+
                   (
+
                       "BACKGROUND",
+
                       (0, 0),
+
                       (0, -1),
+
                       colors.HexColor(
+
                           "#EAF0F6"
+
                       )
+
                   ),
 
+
+
                   (
+
                       "BOX",
+
                       (0, 0),
+
                       (-1, -1),
+
                       0.7,
+
                       colors.HexColor(
+
                           "#B7C3D0"
+
                       )
+
                   ),
 
+
+
                   (
+
                       "INNERGRID",
+
                       (0, 0),
+
                       (-1, -1),
+
                       0.3,
+
                       colors.HexColor(
+
                           "#D5DCE3"
+
                       )
+
                   ),
 
+
+
                   (
+
                       "VALIGN",
+
                       (0, 0),
+
                       (-1, -1),
+
                       "TOP"
+
                   ),
 
+
+
                   (
+
                       "LEFTPADDING",
+
                       (0, 0),
+
                       (-1, -1),
+
                       8
+
                   ),
 
+
+
                   (
+
                       "RIGHTPADDING",
+
                       (0, 0),
+
                       (-1, -1),
+
                       8
+
                   ),
 
+
+
                   (
+
                       "TOPPADDING",
+
                       (0, 0),
+
                       (-1, -1),
+
                       7
+
                   ),
 
+
+
                   (
+
                       "BOTTOMPADDING",
+
                       (0, 0),
+
                       (-1, -1),
+
                       7
+
                   )
 
+
+
               ])
+
           )
 
 
+
+
+
           story.append(
+
               cover_table
+
           )
 
 
+
+
+
           story.append(
+
               PageBreak()
+
           )
 
 
+
+
+
           # ==========================================================
+
           # EXECUTIVE SUMMARY
+
           # ==========================================================
 
+
+
           story.append(
+
               Paragraph(
+
                   "1. Executive Summary",
+
                   heading_style
+
               )
+
           )
 
 
+
+
+
           story.append(
+
               paragraph(
+
                   (
+
                       f"Snyk Container scanning identified "
+
                       f"<b>{len(filtered)}</b> vulnerability "
+
                       f"finding(s) matching the selected "
+
                       f"<b>{SEVERITY_FILTER.upper()}</b> filter."
+
                   ),
+
                   body_style
+
               )
+
           )
+
+
+
 
 
           story.append(
+
               paragraph(
+
                   (
+
                       "For each vulnerability, this report provides "
+
                       "a concise vulnerability summary, the technical "
+
                       "explanation supplied by Snyk, affected package "
+
                       "information, CVSS details and remediation "
+
                       "information."
+
                   ),
+
                   body_style
+
               )
+
           )
 
 
+
+
+
           # ==========================================================
+
           # SEVERITY SUMMARY TABLE
+
           # ==========================================================
+
+
 
           severity_data = [
 
+
+
               [
+
                   paragraph(
+
                       "Severity",
+
                       body_style
+
                   ),
 
+
+
                   paragraph(
+
                       "Count",
+
                       body_style
+
                   )
+
               ],
 
+
+
               [
+
                   paragraph(
+
                       "Critical",
+
                       body_style
+
                   ),
 
+
+
                   paragraph(
+
                       counts["critical"],
+
                       body_style
+
                   )
+
               ],
 
+
+
               [
+
                   paragraph(
+
                       "High",
+
                       body_style
+
                   ),
 
+
+
                   paragraph(
+
                       counts["high"],
+
                       body_style
+
                   )
+
               ],
 
+
+
               [
+
                   paragraph(
+
                       "Medium",
+
                       body_style
+
                   ),
 
+
+
                   paragraph(
+
                       counts["medium"],
+
                       body_style
+
                   )
+
               ],
 
+
+
               [
+
                   paragraph(
+
                       "Low",
+
                       body_style
+
                   ),
 
+
+
                   paragraph(
+
                       counts["low"],
+
                       body_style
+
                   )
+
               ],
 
+
+
               [
-                  paragraph(
-                      "Total",
-                      body_style
-                  ),
 
                   paragraph(
-                      len(filtered),
+
+                      "Total",
+
                       body_style
+
+                  ),
+
+
+
+                  paragraph(
+
+                      len(filtered),
+
+                      body_style
+
                   )
+
+
 
               ]
 
+
+
           ]
+
+
+
 
 
           severity_table = Table(
 
+
+
               severity_data,
 
+
+
               colWidths=[
+
                   70 * mm,
+
                   35 * mm
+
               ]
 
+
+
           )
+
+
+
 
 
           severity_table.setStyle(
+
               TableStyle([
 
+
+
                   (
+
                       "BACKGROUND",
+
                       (0, 0),
+
                       (-1, 0),
+
                       colors.HexColor(
+
                           "#263746"
+
                       )
+
                   ),
 
+
+
                   (
+
                       "TEXTCOLOR",
+
                       (0, 0),
+
                       (-1, 0),
+
                       colors.white
+
                   ),
 
+
+
                   (
+
                       "BOX",
+
                       (0, 0),
+
                       (-1, -1),
+
                       0.6,
+
                       colors.HexColor(
+
                           "#AAB4BE"
+
                       )
+
                   ),
 
+
+
                   (
+
                       "INNERGRID",
+
                       (0, 0),
+
                       (-1, -1),
+
                       0.3,
+
                       colors.HexColor(
+
                           "#D5DCE3"
+
                       )
+
                   ),
 
+
+
                   (
+
                       "ALIGN",
+
                       (1, 1),
+
                       (1, -1),
+
                       "CENTER"
+
                   ),
 
+
+
                   (
+
                       "VALIGN",
+
                       (0, 0),
+
                       (-1, -1),
+
                       "MIDDLE"
+
                   )
 
+
+
               ])
+
           )
 
 
+
+
+
           story.append(
+
               severity_table
+
           )
 
 
+
+
+
           story.append(
+
               Spacer(
+
                   1,
+
                   12
+
               )
+
           )
 
 
+
+
+
           # ==========================================================
+
           # DETAILED FINDINGS
+
           # ==========================================================
+
+
 
           story.append(
+
               Paragraph(
+
                   "2. Detailed Vulnerability Findings",
+
                   heading_style
+
               )
+
           )
+
+
+
 
 
           if not filtered:
 
+
+
               story.append(
+
                   Paragraph(
+
                       "No vulnerabilities matched the selected "
+
                       "severity filter.",
+
                       body_style
+
                   )
+
               )
+
+
+
 
 
           for index, vulnerability in enumerate(
+
               filtered,
+
               1
+
           ):
 
+
+
               severity = get_value(
+
                   vulnerability,
+
                   "severity"
+
               ).upper()
 
 
+
+
+
               vulnerability_id = (
+
                   get_vulnerability_id(
+
                       vulnerability
+
                   )
+
               )
+
+
+
 
 
               title = get_value(
+
                   vulnerability,
+
                   "title",
+
                   "name"
+
               )
+
+
+
 
 
               package_name = get_value(
+
                   vulnerability,
+
                   "packageName",
+
                   "name"
+
               )
+
+
+
 
 
               installed_version = get_value(
+
                   vulnerability,
+
                   "version",
+
                   "installedVersion"
+
               )
+
+
+
 
 
               fixed_version = get_value(
+
                   vulnerability,
+
                   "fixedIn",
+
                   "nearestFixedInVersion",
+
                   "fixedVersion"
+
               )
+
+
+
 
 
               cvss_score = get_cvss_score(
+
                   vulnerability
+
               )
+
+
+
 
 
               cvss_vector = get_cvss_vector(
+
                   vulnerability
+
               )
+
+
+
 
 
               summary = get_vulnerability_summary(
+
                   vulnerability
+
               )
+
+
+
 
 
               description = get_description(
+
                   vulnerability
+
               )
+
+
+
 
 
               location = get_value(
+
                   vulnerability,
+
                   "introducedBy",
+
                   "dockerfileInstruction",
+
                   "introduced"
+
               )
+
+
+
 
 
               remediation = get_value(
+
                   vulnerability,
+
                   "upgradePath",
+
                   "remediation",
+
                   "recommendation"
+
               )
+
+
+
 
 
               references = get_references(
+
                   vulnerability
+
               )
 
 
+
+
+
               # ------------------------------------------------------
+
               # FINDING TITLE
+
               # ------------------------------------------------------
+
+
 
               story.append(
+
                   Paragraph(
+
                       f"{index}. {title}",
+
                       finding_style
+
                   )
+
               )
 
 
+
+
+
               # ------------------------------------------------------
+
               # FINDING INFORMATION
+
               # ------------------------------------------------------
+
+
 
               finding_data = [
 
+
+
                   [
+
                       "Severity",
+
                       severity
+
                   ],
 
+
+
                   [
+
                       "Vulnerability ID",
+
                       vulnerability_id
+
                   ],
 
+
+
                   [
+
                       "Affected Package",
+
                       package_name
+
                   ],
 
+
+
                   [
+
                       "Installed Version",
+
                       installed_version
+
                   ],
 
+
+
                   [
+
                       "Fixed Version",
+
                       fixed_version
+
                   ],
 
+
+
                   [
+
                       "CVSS Score",
+
                       cvss_score
+
                   ]
 
+
+
               ]
+
+
+
 
 
               finding_table = Table(
 
+
+
                   [
 
+
+
                       [
-                          paragraph(
-                              key,
-                              body_style
-                          ),
 
                           paragraph(
-                              value,
+
+                              key,
+
                               body_style
+
+                          ),
+
+
+
+                          paragraph(
+
+                              value,
+
+                              body_style
+
                           )
+
+
 
                       ]
 
+
+
                       for key, value in finding_data
+
+
 
                   ],
 
+
+
                   colWidths=[
+
                       48 * mm,
+
                       125 * mm
+
                   ]
 
+
+
               )
+
+
+
 
 
               finding_table.setStyle(
+
                   TableStyle([
 
+
+
                       (
+
                           "BACKGROUND",
+
                           (0, 0),
+
                           (0, -1),
+
                           colors.HexColor(
+
                               "#F1F4F7"
+
                           )
+
                       ),
 
+
+
                       (
+
                           "BOX",
+
                           (0, 0),
+
                           (-1, -1),
+
                           0.5,
+
                           colors.HexColor(
+
                               "#C3CCD4"
+
                           )
+
                       ),
 
+
+
                       (
+
                           "INNERGRID",
+
                           (0, 0),
+
                           (-1, -1),
+
                           0.3,
+
                           colors.HexColor(
+
                               "#DCE2E7"
+
                           )
+
                       ),
 
+
+
                       (
+
                           "VALIGN",
+
                           (0, 0),
+
                           (-1, -1),
+
                           "TOP"
+
                       )
 
+
+
                   ])
+
               )
 
 
+
+
+
               story.append(
+
                   finding_table
+
               )
 
 
+
+
+
               story.append(
+
                   Spacer(
+
                       1,
+
                       7
+
                   )
+
               )
 
 
+
+
+
               # ------------------------------------------------------
+
               # VULNERABILITY SUMMARY
+
               # ------------------------------------------------------
 
+
+
               story.append(
+
                   Paragraph(
+
                       "<b>Vulnerability Summary</b>",
+
                       body_style
+
                   )
+
               )
 
 
+
+
+
               story.append(
+
                   paragraph(
+
                       summary,
+
                       summary_style
+
                   )
+
               )
 
 
+
+
+
               # ------------------------------------------------------
+
               # WHY IS THIS A VULNERABILITY?
+
               # ------------------------------------------------------
 
+
+
               story.append(
+
                   Paragraph(
+
                       "<b>Why is this a vulnerability?</b>",
+
                       body_style
+
                   )
+
               )
 
 
+
+
+
               story.append(
+
                   paragraph(
+
                       description,
+
                       body_style
+
                   )
+
               )
 
 
+
+
+
               # ------------------------------------------------------
+
               # WHERE IS THE ISSUE?
+
               # ------------------------------------------------------
+
+
 
               story.append(
+
                   Paragraph(
+
                       "<b>Where is the issue in the image?</b>",
+
                       body_style
+
                   )
+
               )
+
+
+
 
 
               if location == "Not provided by Snyk":
 
+
+
                   location_text = (
+
                       "Not provided by Snyk. "
+
                       "Container/package vulnerabilities do not "
+
                       "always map to a source-code file or "
+
                       "Dockerfile instruction."
+
                   )
 
+
+
               else:
+
+
 
                   location_text = location
 
 
+
+
+
               story.append(
+
                   paragraph(
+
                       location_text,
+
                       body_style
+
                   )
+
               )
 
 
+
+
+
               # ------------------------------------------------------
+
               # REMEDIATION
+
               # ------------------------------------------------------
 
+
+
               story.append(
+
                   Paragraph(
+
                       "<b>Recommended Remediation</b>",
+
                       body_style
+
                   )
+
               )
 
 
+
+
+
               story.append(
+
                   paragraph(
+
                       remediation,
+
                       body_style
+
                   )
+
               )
 
 
+
+
+
               # ------------------------------------------------------
+
               # CVSS
+
               # ------------------------------------------------------
+
+
 
               story.append(
+
                   Paragraph(
+
                       "<b>CVSS Details</b>",
+
                       body_style
+
                   )
+
               )
+
+
+
 
 
               cvss_table = Table(
 
+
+
                   [
 
+
+
                       [
-                          paragraph(
-                              "CVSS Score",
-                              small_style
-                          ),
 
                           paragraph(
-                              cvss_score,
+
+                              "CVSS Score",
+
                               small_style
+
+                          ),
+
+
+
+                          paragraph(
+
+                              cvss_score,
+
+                              small_style
+
                           )
+
                       ],
 
+
+
                       [
-                          paragraph(
-                              "CVSS Vector",
-                              small_style
-                          ),
 
                           paragraph(
-                              cvss_vector,
+
+                              "CVSS Vector",
+
                               small_style
+
+                          ),
+
+
+
+                          paragraph(
+
+                              cvss_vector,
+
+                              small_style
+
                           )
+
                       ]
+
+
 
                   ],
 
+
+
                   colWidths=[
+
                       40 * mm,
+
                       133 * mm
+
                   ]
 
+
+
               )
+
+
+
 
 
               cvss_table.setStyle(
+
                   TableStyle([
 
+
+
                       (
+
                           "BACKGROUND",
+
                           (0, 0),
+
                           (0, -1),
+
                           colors.HexColor(
+
                               "#F7F8FA"
+
                           )
+
                       ),
 
+
+
                       (
+
                           "BOX",
+
                           (0, 0),
+
                           (-1, -1),
+
                           0.4,
+
                           colors.HexColor(
+
                               "#D0D6DC"
+
                           )
+
                       ),
 
+
+
                       (
+
                           "INNERGRID",
+
                           (0, 0),
+
                           (-1, -1),
+
                           0.3,
+
                           colors.HexColor(
+
                               "#E1E5E9"
+
                           )
+
                       ),
 
+
+
                       (
+
                           "VALIGN",
+
                           (0, 0),
+
                           (-1, -1),
+
                           "TOP"
+
                       )
 
+
+
                   ])
+
               )
+
+
+
 
 
               story.append(
+
                   cvss_table
+
               )
 
 
+
+
+
               # ------------------------------------------------------
+
               # REFERENCES
+
               # ------------------------------------------------------
+
+
 
               if references:
 
+
+
                   story.append(
+
                       Spacer(
+
                           1,
+
                           6
+
                       )
+
                   )
+
+
+
 
 
                   story.append(
+
                       Paragraph(
+
                           "<b>References</b>",
+
                           body_style
+
                       )
+
                   )
+
+
+
 
 
                   for reference in references[:10]:
 
+
+
                       story.append(
+
                           paragraph(
+
                               reference,
+
                               small_style
+
                           )
+
                       )
 
 
+
+
+
               story.append(
+
                   Spacer(
+
                       1,
+
                       14
+
                   )
+
               )
 
 
+
+
+
           # ==========================================================
+
           # SCAN INFORMATION
+
           # ==========================================================
 
+
+
           story.append(
+
               PageBreak()
+
           )
+
+
+
 
 
           story.append(
+
               Paragraph(
+
                   "3. Scan Information",
+
                   heading_style
+
               )
+
           )
+
+
+
 
 
           scan_information = [
 
+
+
               [
+
                   "Scanning Tool",
+
                   "Snyk Container"
+
               ],
 
+
+
               [
+
                   "Container Image",
+
                   IMAGE_URI
+
               ],
 
+
+
               [
+
                   "Report Type",
+
                   "Filtered Vulnerability Assessment"
+
               ],
 
+
+
               [
+
                   "Selected Filter",
+
                   SEVERITY_FILTER.upper()
+
               ],
 
+
+
               [
+
                   "Included Severities",
+
                   included_severities
+
               ],
 
-              [
-                  "Low Severity",
-                  low_status
-              ],
+
 
               [
-                  "Dependency Path",
-                  "Excluded from report"
-              ],
 
-              [
                   "Security Gate",
+
                   "Not applied - report only"
+
               ],
 
+
+
               [
+
                   "Generated",
+
                   datetime.utcnow().strftime(
+
                       "%Y-%m-%d %H:%M UTC"
+
                   )
+
               ]
+
+
 
           ]
 
 
+
+
+
           scan_table = Table(
+
+
 
               [
 
+
+
                   [
-                      paragraph(
-                          key,
-                          body_style
-                      ),
 
                       paragraph(
-                          value,
+
+                          key,
+
                           body_style
+
+                      ),
+
+
+
+                      paragraph(
+
+                          value,
+
+                          body_style
+
                       )
+
+
 
                   ]
 
+
+
                   for key, value in scan_information
+
+
 
               ],
 
+
+
               colWidths=[
+
                   55 * mm,
+
                   118 * mm
+
               ]
 
+
+
           )
+
+
+
 
 
           scan_table.setStyle(
+
               TableStyle([
 
+
+
                   (
+
                       "BACKGROUND",
+
                       (0, 0),
+
                       (0, -1),
+
                       colors.HexColor(
+
                           "#F1F4F7"
+
                       )
+
                   ),
 
+
+
                   (
+
                       "BOX",
+
                       (0, 0),
+
                       (-1, -1),
+
                       0.5,
+
                       colors.HexColor(
+
                           "#C3CCD4"
+
                       )
+
                   ),
 
+
+
                   (
+
                       "INNERGRID",
+
                       (0, 0),
+
                       (-1, -1),
+
                       0.3,
+
                       colors.HexColor(
+
                           "#DCE2E7"
+
                       )
+
                   ),
 
+
+
                   (
+
                       "VALIGN",
+
                       (0, 0),
+
                       (-1, -1),
+
                       "TOP"
+
                   )
 
+
+
               ])
+
           )
 
 
+
+
+
           story.append(
+
               scan_table
+
           )
 
 
+
+
+
           story.append(
+
               Spacer(
+
                   1,
+
                   12
+
               )
+
           )
+
+
+
 
 
           story.append(
+
               paragraph(
+
                   (
+
                       "Note: Vulnerability summaries, descriptions "
+
                       "and remediation information are based on "
+
                       "information returned by Snyk. If Snyk does "
+
                       "not provide a specific field, the report "
+
                       "explicitly states 'Not provided by Snyk'."
+
                   ),
+
                   small_style
+
               )
+
           )
 
 
+
+
+
           # ==========================================================
+
           # BUILD PDF
+
           # ==========================================================
+
+
 
           print(
+
               "Building PDF..."
+
           )
+
+
+
 
 
           document.build(
+
               story,
+
               onFirstPage=footer,
+
               onLaterPages=footer
+
           )
 
 
+
+
+
           # ==========================================================
+
           # TXT REPORT
+
           # ==========================================================
+
+
 
           with open(
+
               OUTPUT_TXT,
+
               "w",
+
               encoding="utf-8"
+
           ) as report:
 
+
+
               report.write(
+
                   "SNYK CONTAINER SECURITY REPORT\n"
+
               )
 
+
+
               report.write(
+
                   "=" * 80 + "\n\n"
+
               )
 
+
+
               report.write(
+
                   f"Container Image : {IMAGE_URI}\n"
+
               )
 
+
+
               report.write(
+
                   "Scanning Tool   : Snyk Container\n"
+
               )
 
+
+
               report.write(
+
                   "Report Type     : Filtered Vulnerability Assessment\n"
+
               )
 
+
+
               report.write(
+
                   f"Selected Filter : {SEVERITY_FILTER.upper()}\n"
+
               )
 
+
+
               report.write(
+
                   f"Included        : {included_severities}\n"
+
               )
 
-              report.write(
-                  f"Low Severity    : {low_status}\n"
-              )
+
 
               report.write(
-                  "Dependency Path : Excluded\n"
-              )
 
-              report.write(
                   "Security Gate   : Not applied - report only\n"
+
               )
 
+
+
               report.write(
+
                   "\nEXECUTIVE SUMMARY\n"
+
               )
 
+
+
               report.write(
+
                   "-" * 80 + "\n"
+
               )
 
+
+
               report.write(
+
                   f"Total Findings : {len(filtered)}\n"
+
               )
 
+
+
               report.write(
+
                   f"Critical       : {counts['critical']}\n"
+
               )
 
+
+
               report.write(
+
                   f"High           : {counts['high']}\n"
+
               )
 
+
+
               report.write(
+
                   f"Medium         : {counts['medium']}\n"
+
               )
 
+
+
               report.write(
+
                   f"Low            : {counts['low']}\n"
+
               )
 
+
+
               report.write(
+
                   "\nLOW SEVERITY INFORMATION\n"
+
               )
 
+
+
               report.write(
+
                   "-" * 80 + "\n"
+
               )
 
+
+
               report.write(
+
                   f"{low_status}\n"
+
               )
 
+
+
               report.write(
+
                   "\nDETAILED FINDINGS\n"
+
               )
 
+
+
               report.write(
+
                   "=" * 80 + "\n"
+
               )
+
+
+
 
 
               for index, vulnerability in enumerate(
+
                   filtered,
+
                   1
+
               ):
 
+
+
                   report.write(
+
                       f"\n[{index}] "
+
                       f"{get_value(vulnerability, 'title', 'name')}\n"
+
                   )
 
+
+
                   report.write(
+
                       "-" * 80 + "\n"
+
                   )
 
+
+
                   report.write(
+
                       f"Severity          : "
+
                       f"{get_value(vulnerability, 'severity')}\n"
+
                   )
 
+
+
                   report.write(
+
                       f"Vulnerability ID  : "
+
                       f"{get_vulnerability_id(vulnerability)}\n"
+
                   )
 
+
+
                   report.write(
+
                       f"Affected Package  : "
+
                       f"{get_value(vulnerability, 'packageName', 'name')}\n"
+
                   )
 
+
+
                   report.write(
+
                       f"Installed Version : "
+
                       f"{get_value(vulnerability, 'version', 'installedVersion')}\n"
+
                   )
 
+
+
                   report.write(
+
                       f"Fixed Version     : "
+
                       f"{get_value(vulnerability, 'fixedIn', 'nearestFixedInVersion', 'fixedVersion')}\n"
+
                   )
 
+
+
                   report.write(
+
                       f"CVSS Score        : "
+
                       f"{get_cvss_score(vulnerability)}\n"
+
                   )
 
+
+
                   report.write(
+
                       f"CVSS Vector       : "
+
                       f"{get_cvss_vector(vulnerability)}\n"
+
                   )
 
+
+
                   report.write(
+
                       "\nVulnerability Summary\n"
+
                   )
 
+
+
                   report.write(
+
                       f"{get_vulnerability_summary(vulnerability)}\n"
+
                   )
 
+
+
                   report.write(
+
                       "\nWhy is this a vulnerability?\n"
+
                   )
 
+
+
                   report.write(
+
                       f"{get_description(vulnerability)}\n"
+
                   )
 
+
+
                   report.write(
+
                       "\nWhere is the issue in the image?\n"
+
                   )
 
+
+
                   report.write(
+
                       f"{get_value(vulnerability, 'introducedBy', 'dockerfileInstruction', 'introduced')}\n"
+
                   )
 
+
+
                   report.write(
+
                       "\nRecommended Remediation\n"
+
                   )
 
+
+
                   report.write(
+
                       f"{get_value(vulnerability, 'upgradePath', 'remediation', 'recommendation')}\n"
+
                   )
+
+
+
 
 
                   references = get_references(
+
                       vulnerability
+
                   )
+
+
+
 
 
                   if references:
 
+
+
                       report.write(
+
                           "\nReferences\n"
+
                       )
+
+
+
 
 
                       for reference in references[:10]:
 
+
+
                           report.write(
+
                               f"- {reference}\n"
+
                           )
 
 
+
+
+
                   report.write(
+
                       "\n"
+
                   )
 
 
+
+
+
           # ==========================================================
+
           # VERIFY FILES
+
           # ==========================================================
 
+
+
           if not os.path.exists(
+
               OUTPUT_PDF
+
           ):
 
+
+
               raise RuntimeError(
+
                   "PDF was not generated."
+
               )
+
+
+
 
 
           if not os.path.exists(
+
               OUTPUT_TXT
+
           ):
 
+
+
               raise RuntimeError(
+
                   "TXT report was not generated."
+
               )
+
+
+
 
 
           pdf_size = os.path.getsize(
+
               OUTPUT_PDF
+
           )
+
+
+
 
 
           if pdf_size == 0:
 
+
+
               raise RuntimeError(
+
                   "Generated PDF is empty."
+
               )
 
 
+
+
+
           print("")
+
           print(
+
               "=================================================="
+
           )
+
           print(
+
               "FILTERED PDF REPORT GENERATED SUCCESSFULLY"
+
           )
+
           print(
+
               "=================================================="
+
           )
+
           print(
+
               f"PDF      : {OUTPUT_PDF}"
+
           )
+
           print(
+
               f"TXT      : {OUTPUT_TXT}"
+
           )
+
           print(
+
               f"Findings : {len(filtered)}"
+
           )
+
           print(
+
               f"Filter   : {SEVERITY_FILTER.upper()}"
+
           )
+
           print(
+
               f"Included : {included_severities}"
+
           )
+
           print(
+
               f"Low      : {low_status}"
+
           )
+
           print(
+
               "=================================================="
+
           )
+
+
 
           PY
 
 
-      # ============================================================
-      # UPLOAD REPORTS
+
+
+
       # ============================================================
 
+      # UPLOAD REPORTS
+
+      # ============================================================
+
+
+
       - name: Upload filtered Snyk security report
+
         if: always()
+
         uses: actions/upload-artifact@v4
+
         with:
+
           name: snyk-filtered-container-report
+
           path: |
+
             snyk-filtered-raw.json
+
             snyk-filtered-report.txt
+
             snyk-filtered-report.pdf
+
           retention-days: 30
+
           if-no-files-found: warn
 
 
+
+
+
       # ============================================================
+
       # FINAL STATUS
+
       #
+
       # REPORT ONLY
+
       # NO SECURITY GATE
+
       # ============================================================
+
+
 
       - name: Report completed
+
         if: always()
+
         run: |
 
+
+
           echo "=================================================="
+
           echo "SNYK FILTERED REPORT COMPLETED"
+
           echo "=================================================="
+
+
 
           echo "Image          : $IMAGE_URI"
+
           echo "Filter         : $SEVERITY_FILTER"
+
           echo "Snyk Exit Code : ${SNYK_EXIT_CODE:-unknown}"
 
+
+
           echo ""
+
           echo "Included:"
+
           echo "  Critical + High + Medium"
 
+
+
           echo ""
+
           echo "Low:"
+
           echo "  Low severity findings have been excluded from"
+
           echo "  this filtered report and are available in the"
+
           echo "  Full Snyk Security Report."
 
-          echo ""
-          echo "Security Gate: NOT APPLIED"
-          echo "Mode         : REPORT ONLY"
+
 
           echo ""
+
+          echo "Security Gate: NOT APPLIED"
+
+          echo "Mode         : REPORT ONLY"
+
+
+
+          echo ""
+
           echo "Artifacts:"
+
           echo "  - snyk-filtered-report.pdf"
+
           echo "  - snyk-filtered-report.txt"
+
           echo "  - snyk-filtered-raw.json"
+
+
 
           echo "=================================================="
