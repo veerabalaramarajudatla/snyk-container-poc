@@ -1,0 +1,178 @@
+
+name: Snyk UI Portal - Container Vulnerability Scan
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_uri:
+        description: "Full ECR image URI including tag"
+        required: true
+        type: string
+
+      aws_region:
+        description: "AWS Region containing the ECR image"
+        required: true
+        default: "ap-south-1"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  snyk-container-scan:
+    name: Scan ECR Image and Publish to Snyk UI
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Display Scan Parameters
+        env:
+          IMAGE_URI: ${{ inputs.image_uri }}
+          AWS_REGION: ${{ inputs.aws_region }}
+        run: |
+          echo "=========================================="
+          echo "SNYK UI PORTAL - CONTAINER SCAN"
+          echo "=========================================="
+          echo "Image: $IMAGE_URI"
+          echo "Region: $AWS_REGION"
+
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ inputs.aws_region }}
+
+      - name: Verify AWS Identity
+        run: aws sts get-caller-identity
+
+      - name: Validate ECR Image URI
+        shell: bash
+        env:
+          IMAGE_URI: ${{ inputs.image_uri }}
+          AWS_REGION: ${{ inputs.aws_region }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$IMAGE_URI" != *.amazonaws.com/*:* ]]; then
+            echo "ERROR: Provide a full ECR image URI with a tag."
+            echo "Example: 123456789012.dkr.ecr.ap-south-1.amazonaws.com/my-app:latest"
+            exit 1
+          fi
+
+          REGISTRY="${IMAGE_URI%%/*}"
+          IMAGE_PATH="${IMAGE_URI#*/}"
+          REPOSITORY="${IMAGE_PATH%:*}"
+          IMAGE_TAG="${IMAGE_PATH##*:}"
+
+          if [[ "$REGISTRY" != *.dkr.ecr."$AWS_REGION".amazonaws.com ]]; then
+            echo "ERROR: Image registry region does not match AWS Region input."
+            exit 1
+          fi
+
+          if [[ -z "$REPOSITORY" || -z "$IMAGE_TAG" ]]; then
+            echo "ERROR: Repository or image tag is missing."
+            exit 1
+          fi
+
+          echo "ECR_REGISTRY=$REGISTRY" >> "$GITHUB_ENV"
+          echo "ECR_REPOSITORY=$REPOSITORY" >> "$GITHUB_ENV"
+          echo "IMAGE_TAG=$IMAGE_TAG" >> "$GITHUB_ENV"
+          echo "IMAGE_URI=$IMAGE_URI" >> "$GITHUB_ENV"
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Verify ECR Image Exists
+        run: |
+          aws ecr describe-images \
+            --repository-name "$ECR_REPOSITORY" \
+            --image-ids imageTag="$IMAGE_TAG" \
+            --region "${{ inputs.aws_region }}"
+
+      - name: Pull Existing Docker Image
+        run: docker pull "$IMAGE_URI"
+
+      - name: Display Image Information
+        run: |
+          docker image inspect "$IMAGE_URI" \
+            --format 'Image ID: {{.Id}}{{println}}OS: {{.Os}}{{println}}Architecture: {{.Architecture}}{{println}}Size: {{.Size}} bytes'
+
+      - name: Install Snyk CLI
+        run: |
+          npm install --global snyk
+          snyk --version
+
+      - name: Verify Snyk Token
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        run: |
+          if [ -z "$SNYK_TOKEN" ]; then
+            echo "ERROR: Configure the SNYK_TOKEN repository secret."
+            exit 1
+          fi
+          echo "Snyk token is configured."
+
+      - name: Scan Container Vulnerabilities
+        id: snyk_test
+        continue-on-error: true
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        run: |
+          set +e
+          snyk container test "$IMAGE_URI" \
+            --json-file-output=snyk-container-report.json
+          RESULT=$?
+          set -e
+
+          echo "SNYK_TEST_EXIT_CODE=$RESULT" >> "$GITHUB_ENV"
+          echo "Snyk container scan exit code: $RESULT"
+          echo "Exit code 1 may indicate vulnerabilities were found."
+          echo "Review the scan output and report."
+
+      - name: Publish Container Results to Snyk UI
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        run: |
+          snyk container monitor "$IMAGE_URI" \
+            --project-name="Snyk UI Portal - $ECR_REPOSITORY"
+
+      - name: Generate HTML Report
+        if: always()
+        run: |
+          if [ -s snyk-container-report.json ]; then
+            npm install --global snyk-to-html
+            snyk-to-html \
+              -i snyk-container-report.json \
+              -o snyk-container-report.html
+          else
+            echo "JSON report unavailable." \
+              > snyk-container-report-generation-error.txt
+          fi
+
+      - name: Upload Scan Reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: snyk-container-vulnerability-report
+          path: |
+            snyk-container-report.json
+            snyk-container-report.html
+            snyk-container-report-generation-error.txt
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Scan Summary
+        if: always()
+        env:
+          IMAGE_URI: ${{ inputs.image_uri }}
+        run: |
+          echo "=========================================="
+          echo "SNYK CONTAINER SCAN SUMMARY"
+          echo "=========================================="
+          echo "Image: $IMAGE_URI"
+          echo "Snyk test exit code: ${SNYK_TEST_EXIT_CODE:-not available}"
+          echo "Check the job logs and artifacts for reports."
+          echo "Check Snyk UI Projects for published results."
